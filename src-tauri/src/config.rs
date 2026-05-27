@@ -26,6 +26,9 @@ pub struct AppConfig {
     /// 截屏分享分辨率
     #[serde(default = "default_resolution")]
     pub screen_resolution: u64,
+    /// 自动检查更新
+    #[serde(default = "default_auto_update")]
+    pub auto_update: bool,
 }
 
 fn default_fps() -> u64 {
@@ -34,6 +37,10 @@ fn default_fps() -> u64 {
 
 fn default_resolution() -> u64 {
     720
+}
+
+fn default_auto_update() -> bool {
+    true
 }
 
 fn default_sync_interval() -> u64 {
@@ -51,6 +58,7 @@ impl Default for AppConfig {
             autostart: false,
             screen_fps: 10,
             screen_resolution: 720,
+            auto_update: true,
         }
     }
 }

@@ -1,6 +1,7 @@
 use tauri::command;
 use tauri::Emitter;
 use tauri::Manager;
+use tracing::{info, error, warn};
 use crate::models::NetworkMessage;
 use crate::network::server::ConnectionPool;
 use crate::config::load_config;
@@ -16,6 +17,7 @@ pub fn send_chat_message(
     if content.len() > 5_000_000 {
         return Err("图片太大，请发送小于 5MB 的图片".to_string());
     }
+    info!("send_chat_message called, content_len={}, type={}", content.len(), message_type);
     let config = load_config();
     let id = uuid::Uuid::new_v4().to_string();
     let timestamp = chrono::Utc::now().timestamp();
@@ -27,18 +29,36 @@ pub fn send_chat_message(
         message_type: message_type.clone(),
     };
     
-    // 保存到数据库（锁 poison 时直接报错，不静默失败）
+    // 保存到数据库（加详细日志以便排查）
     {
-        let conn = db.lock().map_err(|e| e.to_string())?;
-        conn.execute(
+        let conn = match db.lock() {
+            Ok(c) => c,
+            Err(e) => {
+                error!("db.lock() failed: {}", e);
+                return Err(format!("数据库锁获取失败: {}", e));
+            }
+        };
+        if let Err(e) = conn.execute(
             "INSERT INTO chat_messages (id, sender_id, sender_name, message_type, content, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             [&id, &config.device_id, &config.username, &message_type, &content, &timestamp.to_string()],
-        ).map_err(|e| format!("保存消息到数据库失败: {}", e))?;
+        ) {
+            error!("INSERT chat_messages failed: {}", e);
+            return Err(format!("保存消息到数据库失败: {}", e));
+        }
+        info!("chat message saved to db, id={}", id);
     }
     
     // 广播给所有 peers
     if let Some(state) = app_handle.try_state::<ConnectionPool>() {
-        crate::network::client::broadcast_message(state.inner(), &msg);
+        let pool = state.inner();
+        let count = {
+            let p = pool.lock().map_err(|e| e.to_string())?;
+            p.len()
+        };
+        info!("broadcasting chat message to {} peers", count);
+        crate::network::client::broadcast_message(pool, &msg);
+    } else {
+        warn!("ConnectionPool not found, cannot broadcast");
     }
     
     // 也推送给前端自己（本地显示）
@@ -46,7 +66,7 @@ pub fn send_chat_message(
         "peer_id": config.device_id,
         "message": msg
     }));
-    
+    info!("send_chat_message completed successfully");
     Ok(())
 }
 

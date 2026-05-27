@@ -36,9 +36,17 @@ export default function UpdatePrompt() {
   }, []);
 
   useEffect(() => {
-    // 启动 15 秒后自动检查
-    const timer = setTimeout(() => {
-      checkUpdate();
+    // 启动 15 秒后自动检查（仅在 auto_update 开启时）
+    const timer = setTimeout(async () => {
+      try {
+        const config = await invoke<{ auto_update: boolean }>('get_config');
+        if (config.auto_update !== false) {
+          checkUpdate();
+        }
+      } catch {
+        // 读取配置失败时默认检查
+        checkUpdate();
+      }
     }, 15000);
 
     // 监听更新就绪事件

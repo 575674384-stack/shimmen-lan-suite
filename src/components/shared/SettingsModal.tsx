@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { X, Palette, User, Image, FolderOpen, Clock, Power, Monitor } from 'lucide-react';
+import { X, Palette, User, Image, FolderOpen, Clock, Power, Monitor, RefreshCw } from 'lucide-react';
 import AvatarSettings from '../settings/AvatarSettings';
 
 interface SettingsModalProps {
@@ -47,6 +47,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [autostart, setAutostart] = useState(false);
   const [screenFps, setScreenFps] = useState(10);
   const [screenRes, setScreenRes] = useState(720);
+  const [autoUpdate, setAutoUpdate] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -66,6 +67,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         autostart: boolean;
         screen_fps: number;
         screen_resolution: number;
+        auto_update: boolean;
       }>('get_config');
       setUsername(config.username);
       setAvatarPreset(config.avatar_preset || '');
@@ -74,6 +76,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       setAutostart(config.autostart ?? false);
       setScreenFps(config.screen_fps ?? 10);
       setScreenRes(config.screen_resolution ?? 720);
+      setAutoUpdate(config.auto_update ?? true);
     } catch {
       setUsername('');
       setAvatarPreset('');
@@ -136,6 +139,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       await invoke('set_autostart', { enabled: autostart });
       await invoke('set_screen_fps', { fps: screenFps });
       await invoke('set_screen_resolution', { resolution: screenRes });
+      await invoke('set_auto_update', { enabled: autoUpdate });
       onClose();
       window.location.reload();
     } catch (e) {
@@ -277,6 +281,25 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               />
             </button>
             <span className="text-sm text-text-secondary">{autostart ? '已开启' : '已关闭'}</span>
+          </div>
+        </div>
+
+        {/* 自动检查更新 */}
+        <div className="mb-6">
+          <label className="flex items-center gap-2 text-sm font-medium text-text-primary mb-2">
+            <RefreshCw size={16} />
+            自动检查更新
+          </label>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setAutoUpdate(!autoUpdate)}
+              className={`relative w-11 h-6 rounded-full transition-colors ${autoUpdate ? 'bg-primary' : 'bg-border'}`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${autoUpdate ? 'translate-x-5' : ''}`}
+              />
+            </button>
+            <span className="text-sm text-text-secondary">{autoUpdate ? '已开启' : '已关闭'}</span>
           </div>
         </div>
 

@@ -8,7 +8,7 @@
 
 - **名称**：水门内网协同 (shimmen-lan-suite)
 - **类型**：Tauri v2 桌面应用（Windows）
-- **当前版本**：v0.1.4
+- **当前版本**：v0.1.5
 - **核心特性**：星型拓扑内网协同，自动 Leader 选举，零服务器，内网自发现
 - **GitHub**：`575674384-stack/shimmen-lan-suite`
 
@@ -232,10 +232,11 @@ npx tauri build
 | `autostart` | 开机自启 | false |
 | `screen_fps` | 屏幕分享帧率 | 10 |
 | `screen_resolution` | 屏幕分享分辨率 | 720 |
+| `auto_update` | 自动检查更新 | true |
 
 新增配置命令：
 - `set_download_dir` / `set_sync_interval` / `set_autostart` / `get_autostart_status`
-- `set_screen_fps` / `set_screen_resolution`
+- `set_screen_fps` / `set_screen_resolution` / `set_auto_update`
 
 ---
 
@@ -281,6 +282,11 @@ npx tauri build
 - `FileChunk` 缺少 `.truncate(true)` → 新传输时清空旧文件
 - 前端 `network-message` 无差别 reload → `useTasks`/`AnnouncementBoard` 按 table 过滤
 - 聊天记录无限增长 → 限制保留最近 500 条
+
+### Round 6 — 日志系统 + 可观测性 + 用户可控更新（v0.1.5）
+- 运行时故障无日志 → 引入 `tracing` + `tracing-appender`，按天轮转写入 `%APPDATA%\shimmen-lan-suite\shimmen.log`
+- 聊天发送失败原因不明 → `chat.rs` 关键步骤加 `info!`/`error!`/`warn!` 日志，暴露 DB 锁/INSERT/广播各阶段状态
+- 自动更新不可关闭 → `AppConfig` 新增 `auto_update`（默认 true），设置面板增加开关，`UpdatePrompt.tsx` 启动检查前读取配置
 
 ---
 

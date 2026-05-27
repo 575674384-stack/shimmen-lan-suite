@@ -68,4 +68,11 @@ pub fn set_screen_resolution(resolution: u64) -> Result<(), String> {
     save_config(&config).map_err(|e| e.to_string())
 }
 
+#[command]
+pub fn set_auto_update(enabled: bool) -> Result<(), String> {
+    let mut config = load_config();
+    config.auto_update = enabled;
+    save_config(&config).map_err(|e| e.to_string())
+}
+
 
