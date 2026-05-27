@@ -13,7 +13,8 @@ impl Clone for Connection {
     fn clone(&self) -> Self {
         Self {
             peer_id: self.peer_id.clone(),
-            stream: self.stream.try_clone().expect("Failed to clone TcpStream"),
+            stream: self.stream.try_clone()
+                .unwrap_or_else(|e| panic!("TcpStream clone failed for peer {}: {}", self.peer_id, e)),
             id: self.id.clone(),
         }
     }
@@ -39,6 +40,8 @@ impl Connection {
     pub fn read_message(&self) -> std::io::Result<Vec<u8>> {
         const MAX_MSG_LEN: usize = 50 * 1024 * 1024; // 50 MB cap
         let mut stream = &self.stream;
+        // Set a read timeout to prevent indefinite blocking on dead connections
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(30)));
         let mut len_buf = [0u8; 4];
         stream.read_exact(&mut len_buf)?;
         let len = u32::from_be_bytes(len_buf) as usize;

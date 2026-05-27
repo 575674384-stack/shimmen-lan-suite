@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Search, User, Download, RefreshCw, FolderOpen, Settings2, X } from 'lucide-react';
@@ -40,12 +40,19 @@ export default function FileSearchNetwork() {
     }
   };
 
+  // Keep a ref to the current query to avoid stale closure in event listener
+  const queryRef = useRef(query);
+  queryRef.current = query;
+
   useEffect(() => {
     loadDefaultPaths();
     // Listen for file search responses from remote peers
     const unlisten = listen('file-search-response', (event: any) => {
       if (event.payload?.results?.length > 0) {
-        doSearch(query);
+        const q = queryRef.current;
+        if (q.trim()) {
+          doSearch(q);
+        }
       }
     });
     return () => { unlisten.then((f) => f()); };

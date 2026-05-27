@@ -34,8 +34,9 @@ pub fn clear_remote_index(db: tauri::State<DbPool>) -> Result<(), String> {
 
 #[command]
 pub fn request_file_from_peer(peer_id: String, file_path: String, pool: tauri::State<crate::network::server::ConnectionPool>) -> Result<(), String> {
+    let my_id = crate::config::load_config().device_id;
     let msg = crate::models::NetworkMessage::FileTransferRequest {
-        requester_id: peer_id.clone(),
+        requester_id: my_id,
         file_path,
     };
     crate::network::client::send_to_peer(&pool, &peer_id, &msg)

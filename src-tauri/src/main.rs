@@ -165,6 +165,7 @@ fn main() {
             let peers_for_connect = peers.clone();
             let my_id_for_connect = my_id.clone();
             std::thread::spawn(move || {
+                let mut pending: std::collections::HashSet<String> = std::collections::HashSet::new();
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(3));
                     let online = network::peer::get_online_users(&peers_for_connect);
@@ -172,8 +173,11 @@ fn main() {
                         let p = pool_for_connect.lock().unwrap();
                         p.keys().cloned().collect()
                     };
+                    // Clean up pending peers that have connected
+                    pending.retain(|id| !pool_ids.contains(id));
                     for user in online {
-                        if user.id != my_id_for_connect && !pool_ids.contains(&user.id) {
+                        if user.id != my_id_for_connect && !pool_ids.contains(&user.id) && !pending.contains(&user.id) {
+                            pending.insert(user.id.clone());
                             network::client::connect_to_peer(
                                 user.id.clone(),
                                 user.ip.clone(),

@@ -92,12 +92,12 @@ pub(crate) fn process_message(
 ) {
     if let Ok(msg) = serde_json::from_slice::<NetworkMessage>(data) {
         match &msg {
-            NetworkMessage::ChatMessage { id: _, sender_id, sender_name, content, message_type } => {
+            NetworkMessage::ChatMessage { id, sender_id, sender_name, content, message_type } => {
                 if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
                     if let Ok(conn) = db.lock() {
                         let _ = conn.execute(
-                            "INSERT INTO chat_messages (sender_id, sender_name, content, message_type, timestamp) VALUES (?1, ?2, ?3, ?4, ?5)",
-                            rusqlite::params![sender_id, sender_name, content, message_type, chrono::Utc::now().timestamp()],
+                            "INSERT OR REPLACE INTO chat_messages (id, sender_id, sender_name, content, message_type, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                            rusqlite::params![id, sender_id, sender_name, content, message_type, chrono::Utc::now().timestamp()],
                         );
                     }
                 }
@@ -251,6 +251,38 @@ pub(crate) fn process_message(
                                     "INSERT OR REPLACE INTO ai_config (id, api_key, base_url, model, updated_at) VALUES (1, ?1, ?2, ?3, ?4)",
                                     [&config.api_key, &config.base_url, &config.model, &config.updated_at.to_string()],
                                 );
+                            }
+                        }
+                    }
+                } else if table == "tasks" {
+                    if let Ok(tasks) = serde_json::from_value::<Vec<crate::models::Task>>(data.clone()) {
+                        if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
+                            if let Ok(conn) = db.lock() {
+                                for task in tasks {
+                                    let attached = serde_json::to_string(&task.attached_files).unwrap_or_default();
+                                    let _ = conn.execute(
+                                        "INSERT OR REPLACE INTO tasks (id, title, project, deadline, contact, priority, description, status, creator_id, assignee_id, is_team_visible, attached_files, archived_to_folder_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                                        rusqlite::params![
+                                            task.id, task.title, task.project, task.deadline, task.contact,
+                                            task.priority.to_string(), task.description, task.status.to_string(),
+                                            task.creator_id, task.assignee_id, task.is_team_visible as i32, attached,
+                                            task.archived_to_folder_id, task.created_at, task.updated_at,
+                                        ],
+                                    );
+                                }
+                            }
+                        }
+                    }
+                } else if table == "announcements" {
+                    if let Ok(list) = serde_json::from_value::<Vec<crate::models::Announcement>>(data.clone()) {
+                        if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
+                            if let Ok(conn) = db.lock() {
+                                for item in list {
+                                    let _ = conn.execute(
+                                        "INSERT OR REPLACE INTO announcements (id, title, content, is_pinned, created_by, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                        rusqlite::params![item.id, item.title, item.content, item.is_pinned as i32, item.created_by, item.updated_at],
+                                    );
+                                }
                             }
                         }
                     }

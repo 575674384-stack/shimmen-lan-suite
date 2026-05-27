@@ -82,11 +82,13 @@ pub fn create_shared_folder(
 
 #[command]
 pub fn subscribe_shared_folder(
-    _folder_id: String,
-    _local_path: String,
+    folder_id: String,
+    local_path: String,
     _db: tauri::State<DbPool>,
 ) -> Result<(), String> {
     // TODO: 订阅逻辑，后续 Phase 7b 实现
+    let _ = folder_id;
+    let _ = local_path;
     Ok(())
 }
 
