@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: #0ea5e9;
+  --primary-light: #e0f2fe;
+  --primary-dark: #0284c7;
+  --background: #f8fafc;
+  --surface: #ffffff;
+  --border: #e2e8f0;
+  --text-primary: #1e293b;
+  --text-secondary: #64748b;
+}
+
+[data-theme="blue"] {
+  --primary: #3b82f6;
+  --primary-light: #dbeafe;
+  --primary-dark: #2563eb;
+}
+
+[data-theme="purple"] {
+  --primary: #8b5cf6;
+  --primary-light: #ede9fe;
+  --primary-dark: #7c3aed;
+}
+
+[data-theme="green"] {
+  --primary: #10b981;
+  --primary-light: #d1fae5;
+  --primary-dark: #059669;
+}
+
+[data-theme="orange"] {
+  --primary: #f59e0b;
+  --primary-light: #fef3c7;
+  --primary-dark: #d97706;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: var(--background);
+  color: var(--text-primary);
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
