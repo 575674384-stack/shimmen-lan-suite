@@ -107,7 +107,35 @@ use crate::file_index::indexer::scan_directories;
 
 ---
 
-## 6. 构建与验证
+## 6. 在线更新（Updater）
+
+采用**自定义 GitHub Release 检测方案**，未使用 Tauri 官方 updater 插件的签名机制。
+
+**流程：**
+1. 启动 15 秒后，前端自动调用 `check_update` 命令
+2. 后端通过 GitHub API (`repos/.../releases/latest`) 获取最新 release
+3. 比较版本号（semver），有新版本则弹出提示条
+4. 用户点击"立即更新" → `download_and_install` 后台下载 exe
+5. 下载完成后创建自删除批处理脚本，启动安装程序，应用自动退出
+
+**相关文件：**
+- `src-tauri/src/commands/update.rs` - 更新检查 / 下载安装 / 退出命令
+- `src/components/common/UpdatePrompt.tsx` - 前端更新提示条组件
+
+**发版 checklist：**
+1. 同时修改三个文件的版本号：
+   - `package.json` → `"version": "x.y.z"`
+   - `src-tauri/Cargo.toml` → `version = "x.y.z"`
+   - `src-tauri/tauri.conf.json` → `"version": "x.y.z"`
+2. `npx tauri build`
+3. 在 GitHub 创建 Release，tag 格式 `vx.y.z`
+4. 上传两个 asset：
+   - `shimmen-lan-suite-vx.y.z-portable.exe`
+   - `shimmen-lan-suite-vx.y.z-setup.exe`（asset 名需以 `setup.exe` 结尾，否则更新检测匹配不到）
+
+---
+
+## 7. 构建与验证
 
 ```bash
 # 前端类型检查
@@ -127,7 +155,7 @@ npx tauri build
 
 ---
 
-## 7. 编码规范
+## 8. 编码规范
 
 - **Rust**：使用 `Result<T, String>` 作为命令返回类型；错误用 `.map_err(|e| e.to_string())?`
 - **TypeScript**：严格模式开启；未使用变量/导入会导致构建失败
@@ -137,7 +165,7 @@ npx tauri build
 
 ---
 
-## 8. 特别注意事项
+## 9. 特别注意事项
 
 - **base64**：使用 `base64::engine::general_purpose::STANDARD.encode(content)`，需 `use base64::{engine::general_purpose::STANDARD, Engine as _};`
 - **Tauri Emitter**：`app_handle.emit()` 需要 `use tauri::Emitter;`
