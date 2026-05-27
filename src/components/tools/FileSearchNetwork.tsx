@@ -117,8 +117,8 @@ export default function FileSearchNetwork() {
     }
     try {
       await invoke('request_file_from_peer', {
-        peer_id: entry.peer_id,
-        file_path: entry.file_path,
+        peerId: entry.peer_id,
+        filePath: entry.file_path,
       });
       setMessage(`已向 ${entry.peer_name} 请求传输: ${entry.file_name}`);
     } catch (e) {

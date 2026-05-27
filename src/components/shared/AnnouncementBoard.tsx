@@ -39,9 +39,9 @@ export default function AnnouncementBoard() {
           id: editing?.id || crypto.randomUUID(),
           title: form.title,
           content: form.content || '',
-          is_pinned: form.is_pinned || false,
-          created_by: '',
-          updated_at: Math.floor(Date.now() / 1000),
+          isPinned: form.is_pinned || false,
+          createdBy: '',
+          updatedAt: Math.floor(Date.now() / 1000),
         }
       });
       setShowAdd(false);

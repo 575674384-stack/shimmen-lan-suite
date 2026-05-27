@@ -54,7 +54,7 @@ export default function PrinterTool() {
     if (!selectedPrinter) return;
     setClearing(true);
     try {
-      await invoke('clear_print_queue', { printer_name: selectedPrinter });
+      await invoke('clear_print_queue', { printerName: selectedPrinter });
       loadJobs(selectedPrinter);
     } catch (e) {
       console.error(e);

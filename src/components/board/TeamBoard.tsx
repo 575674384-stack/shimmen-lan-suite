@@ -76,7 +76,7 @@ export default function TeamBoard() {
   const handleArchive = async () => {
     if (!editing?.id || !archiveFolderId) return;
     try {
-      await invoke('archive_task', { task_id: editing.id, folder_id: archiveFolderId });
+      await invoke('archive_task', { taskId: editing.id, folderId: archiveFolderId });
       alert('归档成功！');
       setShowModal(false);
       setEditing(null);

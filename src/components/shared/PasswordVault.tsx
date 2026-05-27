@@ -38,8 +38,8 @@ export default function PasswordVault() {
           account: form.account || '',
           password: form.password || '',
           note: form.note || '',
-          created_by: '',
-          updated_at: Math.floor(Date.now() / 1000),
+          createdBy: '',
+          updatedAt: Math.floor(Date.now() / 1000),
         }
       });
       setShowAdd(false);

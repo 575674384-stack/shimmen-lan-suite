@@ -134,8 +134,8 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const handleSaveSettings = async () => {
     setSaving(true);
     try {
-      await invoke('set_download_dir', { download_dir: downloadDir });
-      await invoke('set_sync_interval', { sync_interval_secs: syncInterval });
+      await invoke('set_download_dir', { downloadDir: downloadDir });
+      await invoke('set_sync_interval', { syncIntervalSecs: syncInterval });
       await invoke('set_autostart', { enabled: autostart });
       await invoke('set_screen_fps', { fps: screenFps });
       await invoke('set_screen_resolution', { resolution: screenRes });
