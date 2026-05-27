@@ -71,7 +71,7 @@ export default function UpdatePrompt() {
     if (!info?.download_url) return;
     setState('downloading');
     try {
-      await invoke('download_and_install', { download_url: info.download_url });
+      await invoke('download_and_install', { downloadUrl: info.download_url });
       // 命令返回后下载线程已在后台运行
     } catch (e) {
       setErrorMsg(String(e));
