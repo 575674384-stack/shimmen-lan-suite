@@ -16,18 +16,26 @@ mod file_index;
 fn main() {
     webview2_check::ensure_webview2();
 
-    // 初始化 tracing 日志：stdout + 日志文件
+    // 初始化 tracing 日志：stderr + 日志文件
     let log_dir = dirs::data_dir()
         .map(|d| d.join("shimmen-lan-suite"))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let _ = std::fs::create_dir_all(&log_dir);
     let log_file = tracing_appender::rolling::daily(&log_dir, "shimmen.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(log_file);
     let subscriber = tracing_subscriber::fmt()
-        .with_writer(log_file)
+        .with_writer(non_blocking)
         .with_ansi(false)
         .with_env_filter(tracing_subscriber::EnvFilter::new("info"))
         .finish();
-    let _ = tracing::subscriber::set_global_default(subscriber);
+    if let Err(e) = tracing::subscriber::set_global_default(subscriber) {
+        eprintln!("[FATAL] tracing subscriber init failed: {}", e);
+    } else {
+        eprintln!("[INFO] tracing subscriber initialized, log dir: {:?}", log_dir);
+    }
+    // leak guard so the non-blocking worker thread lives for the entire app lifetime
+    let _ = Box::leak(Box::new(_guard));
+    tracing::info!("application started, version={}", env!("CARGO_PKG_VERSION"));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
