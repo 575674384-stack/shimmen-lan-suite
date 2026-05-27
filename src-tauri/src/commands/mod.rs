@@ -13,3 +13,4 @@ pub mod ai;
 pub mod avatar;
 pub mod tools;
 pub mod file_index;
+pub mod update;

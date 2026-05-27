@@ -1,6 +1,6 @@
 [package]
 name = "shimmen-lan-suite"
-version = "0.1.0"
+version = "0.1.1"
 description = "内网去中心化协同工具"
 edition = "2021"
 rust-version = "1.75"
@@ -33,6 +33,7 @@ xcap = "0.9"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 ureq = { version = "2", features = ["json"] }
 sysinfo = "0.36.1"
+tauri-plugin-updater = "2.0.0-rc.4"
 
 [features]
 default = ["custom-protocol"]

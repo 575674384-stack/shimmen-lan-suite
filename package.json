@@ -1,7 +1,7 @@
 {
   "name": "shimmen-lan-suite",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,6 +15,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-shell": "^2.0.0",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "lucide-react": "^0.400.0",
     "mammoth": "^1.12.0",
     "react": "^18.3.0",

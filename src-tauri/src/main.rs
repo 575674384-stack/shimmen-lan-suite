@@ -248,6 +248,9 @@ fn main() {
             commands::file_index::search_files_network,
             commands::file_index::clear_remote_index,
             commands::file_index::request_file_from_peer,
+            commands::update::check_update,
+            commands::update::download_and_install,
+            commands::update::exit_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
