@@ -21,8 +21,21 @@ pub fn index_folder(folder_path: &str) -> Result<Vec<FileInfo>, Box<dyn std::err
                 .as_secs() as i64;
 
             let mut hasher = Hasher::new();
-            let content = fs::read(path)?;
-            hasher.update(&content);
+            // 大文件分块读取，避免一次性载入内存
+            const CHUNK_SIZE: usize = 8 * 1024 * 1024; // 8MB
+            let mut file = std::fs::File::open(path)?;
+            let file_len = file.metadata()?.len() as usize;
+            if file_len > CHUNK_SIZE {
+                let mut buf = vec![0u8; CHUNK_SIZE];
+                loop {
+                    let n = std::io::Read::read(&mut file, &mut buf)?;
+                    if n == 0 { break; }
+                    hasher.update(&buf[..n]);
+                }
+            } else {
+                let content = fs::read(path)?;
+                hasher.update(&content);
+            }
             let hash = hasher.finalize().to_hex().to_string();
 
             files.push(FileInfo {

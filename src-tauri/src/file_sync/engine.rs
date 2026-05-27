@@ -30,26 +30,44 @@ impl SyncEngine {
         folder_id: String,
         folder_path: String,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let interval = crate::config::load_config().sync_interval_secs;
         let pool = self.pool.clone();
         let fid = folder_id.clone();
         let fpath = folder_path.clone();
 
-        let watcher = super::watcher::FolderWatcher::new(
-            folder_path,
-            Box::new(move || {
-                // 文件夹变化时：重新索引并广播 FileList
-                if let Ok(files) = indexer::index_folder(&fpath) {
-                    let msg = NetworkMessage::FileList {
-                        folder_id: fid.clone(),
-                        files,
-                    };
-                    let _ = broadcast_message(&pool, &msg);
+        if interval == 0 {
+            // 实时模式：文件系统事件监听
+            let watcher = super::watcher::FolderWatcher::new(
+                folder_path,
+                Box::new(move || {
+                    if let Ok(files) = indexer::index_folder(&fpath) {
+                        let msg = NetworkMessage::FileList {
+                            folder_id: fid.clone(),
+                            files,
+                        };
+                        let _ = broadcast_message(&pool, &msg);
+                    }
+                }),
+            )?;
+            let mut w = self.watchers.lock().map_err(|e| e.to_string())?;
+            w.insert(folder_id, watcher);
+        } else {
+            // 定时模式：按配置间隔轮询扫描
+            let pool = self.pool.clone();
+            std::thread::spawn(move || {
+                let duration = std::time::Duration::from_secs(interval);
+                loop {
+                    std::thread::sleep(duration);
+                    if let Ok(files) = indexer::index_folder(&fpath) {
+                        let msg = NetworkMessage::FileList {
+                            folder_id: fid.clone(),
+                            files,
+                        };
+                        let _ = broadcast_message(&pool, &msg);
+                    }
                 }
-            }),
-        )?;
-
-        let mut w = self.watchers.lock().map_err(|e| e.to_string())?;
-        w.insert(folder_id, watcher);
+            });
+        }
 
         Ok(())
     }

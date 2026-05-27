@@ -49,11 +49,8 @@ pub fn get_download_dir() -> Result<String, String> {
 
 #[command]
 pub fn get_app_download_dir(app_handle: tauri::AppHandle) -> Result<String, String> {
-    let app_dir = app_handle.path().app_data_dir()
-        .map_err(|e| e.to_string())?;
-    let download_dir = app_dir.join("downloads");
-    std::fs::create_dir_all(&download_dir).map_err(|e| e.to_string())?;
-    Ok(download_dir.to_string_lossy().to_string())
+    let dir = crate::config::get_effective_download_dir(&app_handle);
+    Ok(dir.to_string_lossy().to_string())
 }
 
 #[command]

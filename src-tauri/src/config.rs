@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 
 pub const DISCOVERY_PORT: u16 = 23333;
 pub const CONTROL_PORT: u16 = 23334;
@@ -10,6 +11,33 @@ pub struct AppConfig {
     pub device_id: String,
     #[serde(default)]
     pub avatar_preset: String,
+    /// 文件接收保存路径（空字符串表示使用默认 app_data_dir/downloads）
+    #[serde(default)]
+    pub download_dir: String,
+    /// 共享文件夹同步间隔（秒），0 表示实时
+    #[serde(default = "default_sync_interval")]
+    pub sync_interval_secs: u64,
+    /// 开机自启
+    #[serde(default)]
+    pub autostart: bool,
+    /// 截屏分享帧率
+    #[serde(default = "default_fps")]
+    pub screen_fps: u64,
+    /// 截屏分享分辨率
+    #[serde(default = "default_resolution")]
+    pub screen_resolution: u64,
+}
+
+fn default_fps() -> u64 {
+    10
+}
+
+fn default_resolution() -> u64 {
+    720
+}
+
+fn default_sync_interval() -> u64 {
+    0 // 默认实时同步
 }
 
 impl Default for AppConfig {
@@ -18,6 +46,11 @@ impl Default for AppConfig {
             username: whoami::username(),
             device_id: uuid::Uuid::new_v4().to_string(),
             avatar_preset: String::new(),
+            download_dir: String::new(),
+            sync_interval_secs: 0,
+            autostart: false,
+            screen_fps: 10,
+            screen_resolution: 720,
         }
     }
 }
@@ -42,10 +75,16 @@ pub fn load_config() -> AppConfig {
     }
 
     // Ensure both stores are synced
-    let _ = save_config(&cfg);
+    if let Err(e) = save_config(&cfg) {
+        eprintln!("[config] failed to save config during load: {}", e);
+    }
     if let Some(p) = id_file {
-        let _ = std::fs::create_dir_all(p.parent().unwrap_or(&p));
-        let _ = std::fs::write(&p, &cfg.device_id);
+        if let Err(e) = std::fs::create_dir_all(p.parent().unwrap_or(&p)) {
+            eprintln!("[config] failed to create device_id dir: {}", e);
+        }
+        if let Err(e) = std::fs::write(&p, &cfg.device_id) {
+            eprintln!("[config] failed to write device_id file: {}", e);
+        }
     }
 
     cfg
@@ -53,4 +92,18 @@ pub fn load_config() -> AppConfig {
 
 pub fn save_config(cfg: &AppConfig) -> Result<(), confy::ConfyError> {
     confy::store("shimmen-lan-suite", "config", cfg)
+}
+
+/// 获取实际使用的下载目录：优先用户配置， fallback 到 app_data_dir/downloads
+pub fn get_effective_download_dir(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
+    let cfg = load_config();
+    if !cfg.download_dir.is_empty() {
+        let p = std::path::PathBuf::from(&cfg.download_dir);
+        let _ = std::fs::create_dir_all(&p);
+        return p;
+    }
+    let app_dir = app_handle.path().app_data_dir().unwrap_or_default();
+    let p = app_dir.join("downloads");
+    let _ = std::fs::create_dir_all(&p);
+    p
 }

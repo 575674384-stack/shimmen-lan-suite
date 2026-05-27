@@ -59,8 +59,7 @@ pub fn handle_search_response(
     db: &DbPool,
     app_handle: &tauri::AppHandle,
 ) {
-    let peer_name = responder_id.clone();
-    let _ = crate::file_index::indexer::insert_remote_files(responder_id, &peer_name, &results, db);
+    let _ = crate::file_index::indexer::insert_remote_files(responder_id, responder_id, &results, db);
 
     let _ = app_handle.emit("file-search-response", serde_json::json!({
         "responder_id": responder_id,

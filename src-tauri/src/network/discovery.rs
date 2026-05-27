@@ -47,7 +47,7 @@ pub fn start_discovery(config: AppConfig, peers: PeerMap, app_handle: tauri::App
     let recv_version = crate::config::APP_VERSION.to_string();
     let app_handle_for_recv = app_handle.clone();
     thread::spawn(move || {
-        let mut buf = [0u8; 1024];
+        let mut buf = [0u8; 4096];
         loop {
             match recv_socket.recv_from(&mut buf) {
                 Ok((len, addr)) => {

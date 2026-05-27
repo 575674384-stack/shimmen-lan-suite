@@ -38,11 +38,7 @@ pub fn send_chat_message(
     
     // 广播给所有 peers
     if let Some(state) = app_handle.try_state::<ConnectionPool>() {
-        let pool = state.inner();
-        let mut p = pool.lock().map_err(|e| e.to_string())?;
-        for (_, conn) in p.iter_mut() {
-            let _ = conn.send_message(&msg);
-        }
+        crate::network::client::broadcast_message(state.inner(), &msg);
     }
     
     // 也推送给前端自己（本地显示）
@@ -64,11 +60,7 @@ pub fn clear_chat_screen(app_handle: tauri::AppHandle, db: tauri::State<DbPool>)
     }
     
     if let Some(state) = app_handle.try_state::<ConnectionPool>() {
-        let pool = state.inner();
-        let mut p = pool.lock().map_err(|e| e.to_string())?;
-        for (_, conn) in p.iter_mut() {
-            let _ = conn.send_message(&msg);
-        }
+        crate::network::client::broadcast_message(state.inner(), &msg);
     }
     
     let _ = app_handle.emit("network-message", serde_json::json!({
@@ -96,9 +88,7 @@ pub fn send_chat_file(
     let content_base64 = base64::engine::general_purpose::STANDARD.encode(&content);
     
     // 保存到本地下载目录
-    let app_dir = app_handle.path().app_data_dir().unwrap_or_default();
-    let download_dir = app_dir.join("downloads");
-    std::fs::create_dir_all(&download_dir).ok();
+    let download_dir = crate::config::get_effective_download_dir(&app_handle);
     let local_path = download_dir.join(&file_name);
     std::fs::write(&local_path, &content).ok();
     
@@ -130,12 +120,8 @@ pub fn send_chat_file(
     };
     
     if let Some(state) = app_handle.try_state::<ConnectionPool>() {
-        let pool = state.inner();
-        let mut p = pool.lock().map_err(|e| e.to_string())?;
-        for (_, conn) in p.iter_mut() {
-            let _ = conn.send_message(&file_msg);
-            let _ = conn.send_message(&chat_msg);
-        }
+        crate::network::client::broadcast_message(state.inner(), &file_msg);
+        crate::network::client::broadcast_message(state.inner(), &chat_msg);
     }
     
     // 本地显示

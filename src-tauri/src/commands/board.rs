@@ -42,6 +42,13 @@ pub fn save_task(task: Task, db: tauri::State<DbPool>, app_handle: tauri::AppHan
     let now = chrono::Utc::now().timestamp();
     let conn = db.lock().map_err(|e| e.to_string())?;
     
+    // 保留原有 created_at，只在新建时设置
+    let created_at = conn.query_row(
+        "SELECT created_at FROM tasks WHERE id = ?1",
+        [&task.id],
+        |row| row.get::<_, i64>(0),
+    ).unwrap_or(now);
+    
     conn.execute(
         "INSERT OR REPLACE INTO tasks (id, title, project, deadline, contact, priority, description, status, creator_id, assignee_id, is_team_visible, attached_files, archived_to_folder_id, created_at, updated_at, version) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         [
@@ -58,7 +65,7 @@ pub fn save_task(task: Task, db: tauri::State<DbPool>, app_handle: tauri::AppHan
             if task.is_team_visible { "1".to_string() } else { "0".to_string() },
             serde_json::to_string(&task.attached_files).unwrap_or_default(),
             task.archived_to_folder_id.clone().unwrap_or_default(),
-            now.to_string(),
+            created_at.to_string(),
             now.to_string(),
             "[]".to_string(),
         ],

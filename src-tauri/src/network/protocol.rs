@@ -9,7 +9,9 @@ pub struct DiscoveryPacket {
     pub timestamp: i64,
 }
 
+// HeartbeatPacket reserved for future use
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct HeartbeatPacket {
     pub id: String,
     pub timestamp: i64,

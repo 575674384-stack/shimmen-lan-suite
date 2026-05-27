@@ -24,8 +24,9 @@ pub fn start_screen_share(
         return Err("已经在演示中".to_string());
     }
     
-    let target_fps = fps.unwrap_or(10).clamp(5, 30);
-    let target_res = resolution.unwrap_or(720);
+    let cfg = crate::config::load_config();
+    let target_fps = fps.unwrap_or(cfg.screen_fps).clamp(5, 30);
+    let target_res = resolution.unwrap_or(cfg.screen_resolution);
     TARGET_FPS.store(target_fps, Ordering::Relaxed);
     TARGET_RES.store(target_res, Ordering::Relaxed);
     SHARING.store(true, Ordering::Relaxed);
@@ -68,15 +69,18 @@ fn capture_and_broadcast(app_handle: &tauri::AppHandle) -> Result<(), Box<dyn st
     
     let scaled = DynamicImage::ImageRgba8(image).resize(target_w, target_h, FilterType::Triangle);
     
+    // JPEG 编码器不支持 RGBA8，必须先转为 RGB8
+    let rgb_image = scaled.to_rgb8();
+    
     // 高分辨率用较高质量，低分辨率用较低质量
     let quality = if target_w >= 1280 { 40 } else { 30 };
     let mut buf = Vec::new();
     let encoder = JpegEncoder::new_with_quality(&mut buf, quality);
     encoder.write_image(
-        scaled.as_bytes(),
-        scaled.width(),
-        scaled.height(),
-        image::ExtendedColorType::Rgba8,
+        rgb_image.as_raw(),
+        rgb_image.width(),
+        rgb_image.height(),
+        image::ExtendedColorType::Rgb8,
     )?;
     
     let base64 = base64::engine::general_purpose::STANDARD.encode(&buf);

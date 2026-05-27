@@ -156,9 +156,7 @@ pub(crate) fn process_message(
             } => {
                 if folder_id.is_empty() {
                     // 点对点文件传输
-                    let app_dir = app_handle.path().app_data_dir().unwrap_or_default();
-                    let download_dir = app_dir.join("downloads");
-                    std::fs::create_dir_all(&download_dir).ok();
+                    let download_dir = crate::config::get_effective_download_dir(app_handle);
                     
                     let file_name = std::path::Path::new(&file_path)
                         .file_name()

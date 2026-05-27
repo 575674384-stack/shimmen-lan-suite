@@ -130,8 +130,8 @@ use crate::file_index::indexer::scan_directories;
 2. `npx tauri build`
 3. 在 GitHub 创建 Release，tag 格式 `vx.y.z`
 4. 上传两个 asset：
-   - `shimmen-lan-suite-vx.y.z-portable.exe`
-   - `shimmen-lan-suite-vx.y.z-setup.exe`（asset 名需以 `setup.exe` 结尾，否则更新检测匹配不到）
+   - **Portable**：`src-tauri/target/release/shimmen-lan-suite.exe` → 重命名为 `shimmen-lan-suite-vx.y.z-portable.exe`
+   - **Setup**：`src-tauri/target/release/bundle/nsis/水门内网协同_x.y.z_x64-setup.exe` → 重命名为 `shimmen-lan-suite-vx.y.z-setup.exe`（asset 名必须以 `setup.exe` 结尾，否则更新检测匹配不到）
 
 ---
 
@@ -171,4 +171,34 @@ npx tauri build
 - **Tauri Emitter**：`app_handle.emit()` 需要 `use tauri::Emitter;`
 - **文件传输复用**：跨机搜索的文件传输通过构造 `FileTransferRequest` → 服务端响应 `FileResponse`（base64），复用现有文件接收逻辑保存到 downloads 目录
 - **WebView2 兼容**：启动时检测 WebView2 运行时，NSIS 安装包已嵌入 `embedBootstrapper`
-- **自启动**：支持 `--minimized` 参数静默启动，配合注册表实现开机自启
+- **自启动**：支持 `--minimized` 参数静默启动，配合注册表实现开机自启。设置面板提供开关控制
+
+## 10. 配置项清单
+
+`AppConfig`（通过 confy 持久化）包含以下字段：
+
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| `username` | 显示用户名 | 系统用户名 |
+| `device_id` | 设备唯一标识 | UUID |
+| `avatar_preset` | 头像预设 | 空 |
+| `download_dir` | 文件接收保存路径 | 空（fallback 到 app_data_dir/downloads）|
+| `sync_interval_secs` | 共享文件夹同步间隔 | 0（实时）|
+| `autostart` | 开机自启 | false |
+
+新增配置命令：
+- `set_download_dir` / `set_sync_interval` / `set_autostart` / `get_autostart_status`
+
+## 11. 代码审查历史
+
+### Round 4 (本轮)
+- **chat.rs 锁内 I/O**：`send_chat_message` / `send_chat_file` / `clear_chat_screen` 改为使用 `client::broadcast_message`（连接在锁外 clone，避免网络阻塞时卡住整个 pool）
+- **screen_share.rs JPEG 兼容性**：截屏 `Rgba8` 先 `to_rgb8()` 再编码，修复 JPEG 编码器不支持 RGBA 的 panic
+- **board.rs 保留 created_at**：`save_task` 先查询原有 `created_at`，`INSERT OR REPLACE` 时不再覆盖创建时间
+- **file_index 大文件 OOM**：`indexer::index_folder` 分块读取（8MB chunks）计算 blake3 hash，避免一次性载入大文件到内存
+- **冗余 clone 清理**：`file_index/network.rs` 中 `&str` 的无意义 `.clone()` 移除
+- **discovery UDP 缓冲区**：1024 → 4096 字节，避免大包截断
+- **config 写失败加日志**：`save_config` / `.device_id` 写入失败时 `eprintln` 告警，不再静默吞掉
+- **共享文件夹定时同步**：`sync_interval_secs = 0` 启动实时 `FolderWatcher`；>0 时启动定时扫描线程，按间隔广播 `FileList`
+- **截屏质量持久化**：`screen_fps` / `screen_resolution` 加入 `AppConfig`，设置面板支持 5~30 FPS 和 450p/540p/720p 选择
+- **新增设置项**：文件接收路径、共享文件夹同步间隔、开机自启开关、截屏分享质量
