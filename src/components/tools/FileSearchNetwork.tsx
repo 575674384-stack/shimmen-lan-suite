@@ -83,8 +83,8 @@ export default function FileSearchNetwork() {
       const config = await invoke<{ device_id: string; username: string }>('get_config');
       const count = await invoke<number>('rebuild_file_index', {
         paths: scanPaths,
-        peerId: config.device_id,
-        peerName: config.username,
+        peer_id: config.device_id,
+        peer_name: config.username,
       });
       setIndexedCount(count);
       setMessage(`索引完成，共 ${count} 个文件`);
@@ -106,8 +106,8 @@ export default function FileSearchNetwork() {
     }
     try {
       await invoke('request_file_from_peer', {
-        peerId: entry.peer_id,
-        filePath: entry.file_path,
+        peer_id: entry.peer_id,
+        file_path: entry.file_path,
       });
       setMessage(`已向 ${entry.peer_name} 请求传输: ${entry.file_name}`);
     } catch (e) {

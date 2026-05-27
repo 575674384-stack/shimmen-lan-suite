@@ -42,7 +42,7 @@ export default function PrinterTool() {
   const loadJobs = async (printerName: string) => {
     if (!printerName) return;
     try {
-      const data = await invoke<PrintJob[]>('get_print_jobs', { printerName });
+      const data = await invoke<PrintJob[]>('get_print_jobs', { printer_name: printerName });
       setJobs(data);
     } catch (e) {
       console.error(e);
@@ -54,7 +54,7 @@ export default function PrinterTool() {
     if (!selectedPrinter) return;
     setClearing(true);
     try {
-      await invoke('clear_print_queue', { printerName: selectedPrinter });
+      await invoke('clear_print_queue', { printer_name: selectedPrinter });
       loadJobs(selectedPrinter);
     } catch (e) {
       console.error(e);

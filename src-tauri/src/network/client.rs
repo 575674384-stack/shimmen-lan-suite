@@ -2,7 +2,14 @@ use crate::network::connection::Connection;
 use crate::network::server::ConnectionPool;
 use std::thread;
 
-pub fn connect_to_peer(peer_id: String, peer_ip: String, port: u16, pool: ConnectionPool, my_id: String) {
+pub fn connect_to_peer(
+    peer_id: String,
+    peer_ip: String,
+    port: u16,
+    pool: ConnectionPool,
+    my_id: String,
+    app_handle: tauri::AppHandle,
+) {
     thread::spawn(move || {
         let addr = format!("{}:{}", peer_ip, port);
 
@@ -25,17 +32,20 @@ pub fn connect_to_peer(peer_id: String, peer_ip: String, port: u16, pool: Connec
 
         {
             let mut p = pool.lock().unwrap();
-            // Remove any existing connection for this peer before inserting the new one
             p.remove(&peer_id);
             p.insert(peer_id.clone(), conn.clone());
         }
 
-        // Keep a read loop so the peer can send messages back on this connection
+        // Read loop: handle messages sent back on this outbound connection
         loop {
             match conn.read_message() {
-                Ok(_data) => {
-                    // Outbound connections are used for sending; inbound server handles business messages.
-                    // We just need to keep the read loop alive to detect EOF/disconnect.
+                Ok(data) => {
+                    crate::network::server::process_message(
+                        &peer_id,
+                        &data,
+                        &app_handle,
+                        &pool,
+                    );
                 }
                 Err(e) => {
                     eprintln!("[network] outbound read error from {}: {}", peer_id, e);
@@ -45,7 +55,11 @@ pub fn connect_to_peer(peer_id: String, peer_ip: String, port: u16, pool: Connec
         }
 
         let mut p = pool.lock().unwrap();
-        p.remove(&peer_id);
+        if let Some(c) = p.get(&peer_id) {
+            if c.id == conn.id {
+                p.remove(&peer_id);
+            }
+        }
     });
 }
 
@@ -58,12 +72,20 @@ pub fn broadcast_message<T: serde::Serialize>(pool: &ConnectionPool, msg: &T) {
         if let Err(e) = conn.send_message(msg) {
             eprintln!("[network] broadcast to {} failed: {}", conn.peer_id, e);
             let mut p = pool.lock().unwrap();
-            p.remove(&conn.peer_id);
+            if let Some(c) = p.get(&conn.peer_id) {
+                if c.id == conn.id {
+                    p.remove(&conn.peer_id);
+                }
+            }
         }
     }
 }
 
-pub fn send_to_peer<T: serde::Serialize>(pool: &ConnectionPool, peer_id: &str, msg: &T) -> std::io::Result<()> {
+pub fn send_to_peer<T: serde::Serialize>(
+    pool: &ConnectionPool,
+    peer_id: &str,
+    msg: &T,
+) -> std::io::Result<()> {
     let conn = {
         let p = pool.lock().unwrap();
         p.get(peer_id).cloned()
@@ -71,6 +93,9 @@ pub fn send_to_peer<T: serde::Serialize>(pool: &ConnectionPool, peer_id: &str, m
     if let Some(conn) = conn {
         conn.send_message(msg)
     } else {
-        Err(std::io::Error::new(std::io::ErrorKind::NotFound, "peer not connected"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "peer not connected",
+        ))
     }
 }

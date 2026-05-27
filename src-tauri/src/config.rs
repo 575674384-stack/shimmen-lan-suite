@@ -24,23 +24,30 @@ impl Default for AppConfig {
 
 pub fn load_config() -> AppConfig {
     let mut cfg: AppConfig = confy::load("shimmen-lan-suite", "config").unwrap_or_default();
-    if cfg.device_id.is_empty() {
-        // Fallback: try dedicated device ID file
-        if let Some(app_dir) = dirs::data_dir().map(|d| d.join("shimmen-lan-suite")) {
-            let id_file = app_dir.join(".device_id");
-            if let Ok(id) = std::fs::read_to_string(&id_file) {
-                cfg.device_id = id.trim().to_string();
-            }
-        }
-        if cfg.device_id.is_empty() {
-            cfg.device_id = uuid::Uuid::new_v4().to_string();
-            // Save fallback for next time
-            if let Some(app_dir) = dirs::data_dir().map(|d| d.join("shimmen-lan-suite")) {
-                let _ = std::fs::create_dir_all(&app_dir);
-                let _ = std::fs::write(app_dir.join(".device_id"), &cfg.device_id);
-            }
-        }
+
+    // Device ID is the source of identity — keep it stable across config corruption
+    let id_file = dirs::data_dir()
+        .map(|d| d.join("shimmen-lan-suite"))
+        .map(|d| d.join(".device_id"));
+
+    let id_from_file = id_file.as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    if let Some(id) = id_from_file {
+        cfg.device_id = id;
+    } else if cfg.device_id.is_empty() {
+        cfg.device_id = uuid::Uuid::new_v4().to_string();
     }
+
+    // Ensure both stores are synced
+    let _ = save_config(&cfg);
+    if let Some(p) = id_file {
+        let _ = std::fs::create_dir_all(p.parent().unwrap_or(&p));
+        let _ = std::fs::write(&p, &cfg.device_id);
+    }
+
     cfg
 }
 

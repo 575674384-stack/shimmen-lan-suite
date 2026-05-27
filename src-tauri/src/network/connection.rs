@@ -6,6 +6,7 @@ use std::net::TcpStream;
 pub struct Connection {
     pub peer_id: String,
     pub stream: TcpStream,
+    pub id: String,
 }
 
 impl Clone for Connection {
@@ -13,13 +14,14 @@ impl Clone for Connection {
         Self {
             peer_id: self.peer_id.clone(),
             stream: self.stream.try_clone().expect("Failed to clone TcpStream"),
+            id: self.id.clone(),
         }
     }
 }
 
 impl Connection {
     pub fn new(peer_id: String, stream: TcpStream) -> Self {
-        Self { peer_id, stream }
+        Self { peer_id, stream, id: uuid::Uuid::new_v4().to_string() }
     }
 
     /// 发送 JSON 消息：先写 4 字节长度前缀（大端），再写 JSON 内容

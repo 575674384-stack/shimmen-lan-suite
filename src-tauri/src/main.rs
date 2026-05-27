@@ -52,6 +52,7 @@ fn main() {
             let pool_for_server = pool.clone();
             let peers_for_server = peers.clone();
             let app_handle = app.app_handle().clone();
+            let app_handle_for_reconnect = app_handle.clone();
             std::thread::spawn(move || {
                 let _ = network::server::start_server(
                     config::CONTROL_PORT,
@@ -179,6 +180,7 @@ fn main() {
                                 config::CONTROL_PORT,
                                 pool_for_connect.clone(),
                                 my_id_for_connect.clone(),
+                                app_handle_for_reconnect.clone(),
                             );
                         }
                     }

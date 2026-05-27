@@ -62,7 +62,7 @@ export default function KanbanBoard() {
   const handleArchive = async () => {
     if (!editing?.id || !archiveFolderId) return;
     try {
-      await invoke('archive_task', { taskId: editing.id, folderId: archiveFolderId });
+      await invoke('archive_task', { task_id: editing.id, folder_id: archiveFolderId });
       alert('归档成功！');
       setShowModal(false);
       setEditing(null);

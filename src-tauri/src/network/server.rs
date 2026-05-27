@@ -72,7 +72,11 @@ fn handle_incoming(stream: TcpStream, pool: ConnectionPool, app_handle: tauri::A
                     }
 
                     let mut p = pool.lock().unwrap();
-                    p.remove(&peer_id);
+                    if let Some(c) = p.get(&peer_id) {
+                        if c.id == conn.id {
+                            p.remove(&peer_id);
+                        }
+                    }
                 }
             }
         }
@@ -80,7 +84,7 @@ fn handle_incoming(stream: TcpStream, pool: ConnectionPool, app_handle: tauri::A
     }
 }
 
-fn process_message(
+pub(crate) fn process_message(
     peer_id: &str,
     data: &[u8],
     app_handle: &tauri::AppHandle,
