@@ -55,6 +55,7 @@ fn handle_incoming(stream: TcpStream, pool: ConnectionPool, app_handle: tauri::A
 
                     {
                         let mut p = pool.lock().unwrap();
+                        p.remove(&peer_id); // close any stale connection first
                         p.insert(peer_id.clone(), conn.clone());
                     }
 
@@ -63,7 +64,8 @@ fn handle_incoming(stream: TcpStream, pool: ConnectionPool, app_handle: tauri::A
                             Ok(data) => {
                                 process_message(&peer_id, &data, &app_handle, &pool);
                             }
-                            Err(_) => {
+                            Err(e) => {
+                                eprintln!("[network] read error from {}: {}", peer_id, e);
                                 break;
                             }
                         }
@@ -86,7 +88,24 @@ fn process_message(
 ) {
     if let Ok(msg) = serde_json::from_slice::<NetworkMessage>(data) {
         match &msg {
-            NetworkMessage::ChatMessage { .. } | NetworkMessage::ClearScreen { .. } => {
+            NetworkMessage::ChatMessage { id: _, sender_id, sender_name, content, message_type } => {
+                if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
+                    if let Ok(conn) = db.lock() {
+                        let _ = conn.execute(
+                            "INSERT INTO chat_messages (sender_id, sender_name, content, message_type, timestamp) VALUES (?1, ?2, ?3, ?4, ?5)",
+                            rusqlite::params![sender_id, sender_name, content, message_type, chrono::Utc::now().timestamp()],
+                        );
+                    }
+                }
+                let _ = app_handle.emit(
+                    "network-message",
+                    serde_json::json!({
+                        "peer_id": peer_id,
+                        "message": msg
+                    }),
+                );
+            }
+            NetworkMessage::ClearScreen { .. } => {
                 let _ = app_handle.emit(
                     "network-message",
                     serde_json::json!({
@@ -137,7 +156,11 @@ fn process_message(
                     let download_dir = app_dir.join("downloads");
                     std::fs::create_dir_all(&download_dir).ok();
                     
-                    let file_path_full = download_dir.join(&file_path);
+                    let file_name = std::path::Path::new(&file_path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown");
+                    let file_path_full = download_dir.join(file_name);
                     if let Ok(content) = base64::engine::general_purpose::STANDARD.decode(content_base64) {
                         std::fs::write(&file_path_full, content).ok();
                     }
@@ -236,15 +259,7 @@ fn process_message(
                     }),
                 );
             }
-            _ => {
-                let _ = app_handle.emit(
-                    "network-message",
-                    serde_json::json!({
-                        "peer_id": peer_id,
-                        "message": msg
-                    }),
-                );
-            }
+
         }
     }
 }

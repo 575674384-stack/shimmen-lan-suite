@@ -59,7 +59,7 @@ export default function ChatWindow() {
 
   const handleSendFile = async (filePath: string) => {
     try {
-      await invoke('send_chat_file', { filePath });
+      await invoke('send_chat_file', { file_path: filePath });
     } catch (err) {
       alert('发送文件失败: ' + (err instanceof Error ? err.message : String(err)));
     }

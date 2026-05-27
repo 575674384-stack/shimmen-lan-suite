@@ -93,7 +93,7 @@ export function useChat() {
   const sendMessage = useCallback(async (content: string, type: 'text' | 'file' | 'image' = 'text') => {
     await invoke('send_chat_message', {
       content,
-      messageType: type,
+      message_type: type,
     });
   }, []);
 

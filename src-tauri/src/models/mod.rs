@@ -165,9 +165,6 @@ pub struct RemoteFileInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum NetworkMessage {
-    Discovery { id: String, username: String, ip: String, version: String },
-    DiscoveryResponse { id: String, username: String, ip: String, version: String },
-    Heartbeat { id: String },
     ChatMessage { id: String, sender_id: String, sender_name: String, content: String, message_type: String },
     ClearScreen,
     StateSync { table: String, data: serde_json::Value, version: serde_json::Value },

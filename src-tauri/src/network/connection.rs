@@ -35,10 +35,14 @@ impl Connection {
 
     /// 读取一条消息：先读 4 字节长度，再读对应长度的 JSON
     pub fn read_message(&self) -> std::io::Result<Vec<u8>> {
+        const MAX_MSG_LEN: usize = 50 * 1024 * 1024; // 50 MB cap
         let mut stream = &self.stream;
         let mut len_buf = [0u8; 4];
         stream.read_exact(&mut len_buf)?;
         let len = u32::from_be_bytes(len_buf) as usize;
+        if len > MAX_MSG_LEN {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("message too large: {} bytes", len)));
+        }
         let mut buf = vec![0u8; len];
         stream.read_exact(&mut buf)?;
         Ok(buf)

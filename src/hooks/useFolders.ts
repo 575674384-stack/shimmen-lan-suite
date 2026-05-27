@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type { SharedFolder } from '../types';
 
 export function useFolders() {
@@ -14,17 +15,21 @@ export function useFolders() {
   };
 
   const createFolder = async (name: string, localPath: string) => {
-    await invoke('create_shared_folder', { name, localPath });
+    await invoke('create_shared_folder', { name, local_path: localPath });
     await loadFolders();
   };
 
   const subscribeFolder = async (folderId: string, localPath: string) => {
-    await invoke('subscribe_shared_folder', { folderId, localPath });
+    await invoke('subscribe_shared_folder', { folder_id: folderId, local_path: localPath });
     await loadFolders();
   };
 
   useEffect(() => {
     loadFolders();
+    const unlisten = listen('file-sync', () => {
+      loadFolders();
+    });
+    return () => { unlisten.then(f => f()); };
   }, []);
 
   return { myFolders, remoteFolders, createFolder, subscribeFolder, refresh: loadFolders };

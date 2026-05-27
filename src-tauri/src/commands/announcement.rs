@@ -64,9 +64,23 @@ pub fn save_announcement(
 }
 
 #[command]
-pub fn delete_announcement(id: String, db: tauri::State<DbPool>) -> Result<(), String> {
+pub fn delete_announcement(id: String, db: tauri::State<DbPool>, app_handle: tauri::AppHandle) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM announcements WHERE id = ?1", [id])
         .map_err(|e| e.to_string())?;
+    drop(conn);
+    
+    // Broadcast deletion to all peers
+    if let Ok(list) = get_announcements(db) {
+        let msg = crate::models::NetworkMessage::StateSync {
+            table: "announcements".to_string(),
+            data: serde_json::to_value(&list).unwrap_or(serde_json::Value::Null),
+            version: serde_json::json!({}),
+        };
+        if let Some(state) = app_handle.try_state::<crate::network::server::ConnectionPool>() {
+            crate::network::client::broadcast_message(state.inner(), &msg);
+        }
+    }
+    
     Ok(())
 }

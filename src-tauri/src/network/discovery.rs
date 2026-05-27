@@ -65,7 +65,7 @@ pub fn start_discovery(config: AppConfig, peers: PeerMap, app_handle: tauri::App
                             let user = User {
                                 id: packet.id,
                                 username: packet.username,
-                                ip: packet.ip,
+                                ip: addr.ip().to_string(),
                                 status: UserStatus::Online,
                                 version: packet.version,
                             };
@@ -101,10 +101,27 @@ pub fn start_discovery(config: AppConfig, peers: PeerMap, app_handle: tauri::App
 }
 
 fn get_local_ip() -> Option<String> {
-    use std::net::TcpStream;
-    if let Ok(socket) = TcpStream::connect("8.8.8.8:80") {
-        if let Ok(addr) = socket.local_addr() {
-            return Some(addr.ip().to_string());
+    use std::net::UdpSocket;
+    // Fast path: try external route (works when internet is available)
+    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("8.8.8.8:80").is_ok() {
+            if let Ok(addr) = socket.local_addr() {
+                let ip = addr.ip().to_string();
+                if ip != "127.0.0.1" && !ip.starts_with("169.254.") {
+                    return Some(ip);
+                }
+            }
+        }
+    }
+    // Fallback: LAN-only environments — connect to broadcast to discover local IP
+    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("255.255.255.255:1").is_ok() {
+            if let Ok(addr) = socket.local_addr() {
+                let ip = addr.ip().to_string();
+                if ip != "127.0.0.1" && !ip.starts_with("169.254.") {
+                    return Some(ip);
+                }
+            }
         }
     }
     None

@@ -54,12 +54,12 @@ export default function TransferWindow({ user, onClose }: TransferWindowProps) {
     setRecords(prev => [...prev, newRecord]);
 
     try {
-      await invoke('send_file_to_peer', { peerId: user.id, filePath });
+      await invoke('send_file_to_peer', { peer_id: user.id, file_path: filePath });
       setRecords(prev => prev.map(r => r.id === newRecord.id ? { ...r, status: 'completed', progress: 100 } : r));
       // 同时在共享聊天中发送文件消息
       await invoke('send_chat_message', {
         content: fileName,
-        messageType: 'file',
+        message_type: 'file',
       });
     } catch (err) {
       console.error('Send file failed:', err);

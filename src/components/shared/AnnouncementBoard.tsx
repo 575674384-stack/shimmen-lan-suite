@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { ClipboardList, Plus, Pin, Trash2, Save } from 'lucide-react';
 import type { Announcement } from '../../types';
 
@@ -14,7 +15,13 @@ export default function AnnouncementBoard() {
     setAnnouncements(data);
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    const unlisten = listen('network-message', () => {
+      load();
+    });
+    return () => { unlisten.then(f => f()); };
+  }, []);
 
   const handleSave = async () => {
     if (!form.title?.trim()) return;

@@ -1,4 +1,5 @@
 use tauri::command;
+use tauri::Manager;
 use crate::db::DbPool;
 use crate::models::{SharedFolder, SyncStatus};
 use crate::network::folder_cache::RemoteFolderCache;
@@ -45,6 +46,7 @@ pub fn create_shared_folder(
     name: String,
     local_path: String,
     db: tauri::State<DbPool>,
+    app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let config = crate::config::load_config();
     let conn = db.lock().map_err(|e| e.to_string())?;
@@ -61,6 +63,19 @@ pub fn create_shared_folder(
             "syncing",
         ],
     ).map_err(|e| e.to_string())?;
+    drop(conn);
+    
+    // Broadcast updated folder list to all peers
+    if let Ok(folders) = get_my_shared_folders(db) {
+        let msg = crate::models::NetworkMessage::StateSync {
+            table: "shared_folders".to_string(),
+            data: serde_json::to_value(&folders).unwrap_or(serde_json::Value::Null),
+            version: serde_json::json!({}),
+        };
+        if let Some(state) = app_handle.try_state::<crate::network::server::ConnectionPool>() {
+            crate::network::client::broadcast_message(state.inner(), &msg);
+        }
+    }
     
     Ok(())
 }

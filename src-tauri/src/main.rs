@@ -39,17 +39,11 @@ fn main() {
             let config = config::load_config();
             let my_id = config.device_id.clone();
             
-            // start discovery
+            // Peers map must exist before both TCP server and discovery
             let peers = network::peer::create_peer_map();
             app.manage(peers.clone());
-            let peers_for_discovery = peers.clone();
-            let config_for_discovery = config.clone();
-            let app_handle_for_discovery = app.app_handle().clone();
-            std::thread::spawn(move || {
-                let _ = network::discovery::start_discovery(config_for_discovery, peers_for_discovery, app_handle_for_discovery);
-            });
             
-            // start TCP server
+            // start TCP server FIRST (before discovery so port is ready when peers try to connect)
             let pool = network::server::create_connection_pool();
             app.manage(pool.clone());
             
@@ -65,6 +59,15 @@ fn main() {
                     pool_for_server,
                     app_handle,
                 );
+            });
+            
+            // start discovery AFTER TCP server is bound
+            let peers_for_discovery = peers.clone();
+            let config_for_discovery = config.clone();
+            let app_handle_for_discovery = app.app_handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let _ = network::discovery::start_discovery(config_for_discovery, peers_for_discovery, app_handle_for_discovery);
             });
             
             // create and manage sync engine
@@ -156,17 +159,20 @@ fn main() {
                 }
             });
 
-            // periodically connect to new peers
+            // periodically connect to new peers (or reconnect lost ones)
             let pool_for_connect = pool.clone();
             let peers_for_connect = peers.clone();
             let my_id_for_connect = my_id.clone();
             std::thread::spawn(move || {
-                let mut connected = std::collections::HashSet::<String>::new();
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(3));
                     let online = network::peer::get_online_users(&peers_for_connect);
+                    let pool_ids: std::collections::HashSet<String> = {
+                        let p = pool_for_connect.lock().unwrap();
+                        p.keys().cloned().collect()
+                    };
                     for user in online {
-                        if user.id != my_id_for_connect && !connected.contains(&user.id) {
+                        if user.id != my_id_for_connect && !pool_ids.contains(&user.id) {
                             network::client::connect_to_peer(
                                 user.id.clone(),
                                 user.ip.clone(),
@@ -174,7 +180,6 @@ fn main() {
                                 pool_for_connect.clone(),
                                 my_id_for_connect.clone(),
                             );
-                            connected.insert(user.id);
                         }
                     }
                 }

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type { Task } from '../types';
 
 export function useTasks() {
@@ -25,7 +26,13 @@ export function useTasks() {
     await load();
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    const unlisten = listen('network-message', () => {
+      load();
+    });
+    return () => { unlisten.then(f => f()); };
+  }, []);
 
   return { tasks, load, saveTask, deleteTask, updateStatus };
 }

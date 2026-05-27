@@ -97,21 +97,45 @@ fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> Result<(), Box<
 }
 
 #[command]
-pub fn delete_task(id: String, db: tauri::State<DbPool>) -> Result<(), String> {
+pub fn delete_task(id: String, db: tauri::State<DbPool>, app_handle: tauri::AppHandle) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM tasks WHERE id = ?1", [id])
         .map_err(|e| e.to_string())?;
+    drop(conn);
+    
+    if let Ok(tasks) = get_tasks(db) {
+        let msg = NetworkMessage::StateSync {
+            table: "tasks".to_string(),
+            data: serde_json::to_value(&tasks).unwrap_or(serde_json::Value::Null),
+            version: serde_json::json!({}),
+        };
+        if let Some(state) = app_handle.try_state::<ConnectionPool>() {
+            broadcast_message(state.inner(), &msg);
+        }
+    }
     Ok(())
 }
 
 #[command]
-pub fn update_task_status(id: String, status: String, db: tauri::State<DbPool>) -> Result<(), String> {
+pub fn update_task_status(id: String, status: String, db: tauri::State<DbPool>, app_handle: tauri::AppHandle) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now().timestamp();
     conn.execute(
         "UPDATE tasks SET status = ?1, updated_at = ?2 WHERE id = ?3",
         [status.clone(), now.to_string(), id.clone()],
     ).map_err(|e| e.to_string())?;
+    drop(conn);
+    
+    if let Ok(tasks) = get_tasks(db) {
+        let msg = NetworkMessage::StateSync {
+            table: "tasks".to_string(),
+            data: serde_json::to_value(&tasks).unwrap_or(serde_json::Value::Null),
+            version: serde_json::json!({}),
+        };
+        if let Some(state) = app_handle.try_state::<ConnectionPool>() {
+            broadcast_message(state.inner(), &msg);
+        }
+    }
     Ok(())
 }
 
@@ -120,6 +144,7 @@ pub fn archive_task(
     task_id: String,
     folder_id: String,
     db: tauri::State<DbPool>,
+    app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     
@@ -192,6 +217,17 @@ pub fn archive_task(
         "UPDATE tasks SET archived_to_folder_id = ?1, updated_at = ?2 WHERE id = ?3",
         [&folder_id, &now.to_string(), &task_id],
     ).map_err(|e| e.to_string())?;
+    drop(conn);
     
+    if let Ok(tasks) = get_tasks(db) {
+        let msg = NetworkMessage::StateSync {
+            table: "tasks".to_string(),
+            data: serde_json::to_value(&tasks).unwrap_or(serde_json::Value::Null),
+            version: serde_json::json!({}),
+        };
+        if let Some(state) = app_handle.try_state::<ConnectionPool>() {
+            broadcast_message(state.inner(), &msg);
+        }
+    }
     Ok(())
 }

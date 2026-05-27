@@ -31,13 +31,7 @@ pub async fn send_file_to_peer(
     
     if let Some(state) = app_handle.try_state::<ConnectionPool>() {
         let pool = state.inner();
-        let json = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
-        let mut p = pool.lock().map_err(|e| e.to_string())?;
-        if let Some(conn) = p.get_mut(&peer_id) {
-            conn.send_message(&json).map_err(|e| e.to_string())?;
-        } else {
-            return Err("Peer not connected".to_string());
-        }
+        crate::network::client::send_to_peer(pool, &peer_id, &msg).map_err(|e| e.to_string())?;
     } else {
         return Err("Connection pool not available".to_string());
     }
