@@ -36,7 +36,13 @@ export default function TransferWindow({ user, onClose }: TransferWindowProps) {
   }, []);
 
   const handleSendFile = async () => {
-    const filePath = await invoke<string | null>('select_file');
+    let filePath: string | null = null;
+    try {
+      filePath = await invoke<string | null>('select_file');
+    } catch (e) {
+      console.error('选择文件失败:', e);
+      return;
+    }
     if (!filePath) return;
 
     const fileName = filePath.split(/[/\\]/).pop() || 'unknown';

@@ -11,40 +11,58 @@ export default function AnnouncementBoard() {
   const [form, setForm] = useState<Partial<Announcement>>({});
 
   const load = async () => {
-    const data = await invoke<Announcement[]>('get_announcements');
-    setAnnouncements(data);
+    try {
+      const data = await invoke<Announcement[]>('get_announcements');
+      setAnnouncements(data);
+    } catch (e) {
+      console.error('获取公告失败:', e);
+    }
   };
 
   useEffect(() => {
     load();
-    const unlisten = listen('network-message', () => {
-      load();
+    const unlisten = listen('network-message', (event: any) => {
+      // 只对 announcements 相关的 StateSync 触发刷新
+      const msg = event.payload?.message;
+      if (msg?.type === 'StateSync' && msg?.payload?.table === 'announcements') {
+        load();
+      }
     });
     return () => { unlisten.then(f => f()); };
   }, []);
 
   const handleSave = async () => {
     if (!form.title?.trim()) return;
-    await invoke('save_announcement', {
-      announcement: {
-        id: editing?.id || crypto.randomUUID(),
-        title: form.title,
-        content: form.content || '',
-        is_pinned: form.is_pinned || false,
-        created_by: '',
-        updated_at: Date.now(),
-      }
-    });
-    setShowAdd(false);
-    setEditing(null);
-    setForm({});
-    await load();
+    try {
+      await invoke('save_announcement', {
+        announcement: {
+          id: editing?.id || crypto.randomUUID(),
+          title: form.title,
+          content: form.content || '',
+          is_pinned: form.is_pinned || false,
+          created_by: '',
+          updated_at: Math.floor(Date.now() / 1000),
+        }
+      });
+      setShowAdd(false);
+      setEditing(null);
+      setForm({});
+      await load();
+    } catch (e) {
+      console.error('保存公告失败:', e);
+      alert('保存公告失败: ' + ((e as any)?.message || '未知错误'));
+    }
   };
 
   const handleDelete = async (id: string) => {
     if (!confirm('确定删除此公告？')) return;
-    await invoke('delete_announcement', { id });
-    await load();
+    try {
+      await invoke('delete_announcement', { id });
+      await load();
+    } catch (e) {
+      console.error('删除公告失败:', e);
+      alert('删除公告失败: ' + ((e as any)?.message || '未知错误'));
+    }
   };
 
   return (

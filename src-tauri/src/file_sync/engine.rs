@@ -6,6 +6,7 @@ use crate::network::client::{broadcast_message, send_to_peer};
 use crate::network::server::ConnectionPool;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub struct SyncEngine {
@@ -13,6 +14,7 @@ pub struct SyncEngine {
     pool: ConnectionPool,
     app_dir: PathBuf,
     watchers: Arc<Mutex<HashMap<String, super::watcher::FolderWatcher>>>,
+    stop_flags: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }
 
 impl SyncEngine {
@@ -22,6 +24,18 @@ impl SyncEngine {
             pool,
             app_dir,
             watchers: Arc::new(Mutex::new(HashMap::new())),
+            stop_flags: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+    
+    pub fn stop_monitoring(&self, folder_id: &str) {
+        if let Ok(mut flags) = self.stop_flags.lock() {
+            if let Some(flag) = flags.remove(folder_id) {
+                flag.store(false, Ordering::Relaxed);
+            }
+        }
+        if let Ok(mut w) = self.watchers.lock() {
+            w.remove(folder_id);
         }
     }
 
@@ -50,14 +64,22 @@ impl SyncEngine {
                 }),
             )?;
             let mut w = self.watchers.lock().map_err(|e| e.to_string())?;
-            w.insert(folder_id, watcher);
+            w.insert(folder_id.clone(), watcher);
         } else {
             // 定时模式：按配置间隔轮询扫描
+            let running = Arc::new(AtomicBool::new(true));
+            {
+                let mut flags = self.stop_flags.lock().map_err(|e| e.to_string())?;
+                flags.insert(folder_id.clone(), running.clone());
+            }
             let pool = self.pool.clone();
             std::thread::spawn(move || {
                 let duration = std::time::Duration::from_secs(interval);
-                loop {
+                while running.load(Ordering::Relaxed) {
                     std::thread::sleep(duration);
+                    if !running.load(Ordering::Relaxed) {
+                        break;
+                    }
                     if let Ok(files) = indexer::index_folder(&fpath) {
                         let msg = NetworkMessage::FileList {
                             folder_id: fid.clone(),
@@ -160,14 +182,16 @@ impl SyncEngine {
         folder_id: &str,
         file_path: &str,
     ) -> Option<NetworkMessage> {
-        let conn = self.db.lock().ok()?;
-        let local_path: String = conn
-            .query_row(
+        // 先查 DB 获取本地路径，然后立即释放锁
+        let local_path: String = {
+            let conn = self.db.lock().ok()?;
+            conn.query_row(
                 "SELECT local_path FROM shared_folders WHERE id = ?1",
                 rusqlite::params![folder_id],
                 |row| row.get(0),
             )
-            .ok()?;
+            .ok()?
+        };
         self.handle_file_request(folder_id, file_path, &local_path).ok()
     }
 }

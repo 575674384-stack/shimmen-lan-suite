@@ -3,11 +3,45 @@ use crate::network::connection::Connection;
 use crate::network::folder_cache::RemoteFolderCache;
 use crate::network::peer::PeerMap;
 use base64::Engine;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fs::OpenOptions;
+use std::io::{Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use tauri::{Emitter, Manager};
+
+const CHUNK_SIZE: usize = 256 * 1024;
+
+struct ChunkReceive {
+    file: std::fs::File,
+    received: HashSet<u32>,
+    total_chunks: u32,
+}
+
+fn chunk_receives() -> &'static Mutex<HashMap<String, ChunkReceive>> {
+    static INSTANCE: OnceLock<Mutex<HashMap<String, ChunkReceive>>> = OnceLock::new();
+    INSTANCE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 检查文件路径是否包含路径遍历组件（..）或绝对路径
+pub(crate) fn is_path_safe(path: &str) -> bool {
+    !path.contains("..") && !std::path::Path::new(path).is_absolute()
+}
+
+pub(crate) fn cleanup_peer_chunks(peer_id: &str) {
+    let mut map = chunk_receives().lock().unwrap();
+    let keys_to_remove: Vec<String> = map.keys()
+        .filter(|k| k.starts_with(&format!("{}:", peer_id)))
+        .cloned()
+        .collect();
+    for key in keys_to_remove {
+        map.remove(&key);
+    }
+}
+
+const MAX_CONNECTIONS: usize = 128;
 
 pub type ConnectionPool = Arc<Mutex<HashMap<String, Connection>>>;
 
@@ -22,15 +56,49 @@ pub fn start_server(
     app_handle: tauri::AppHandle,
 ) -> std::io::Result<()> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", port))?;
+    let active_count = Arc::new(AtomicUsize::new(0));
+
+    // Leader 心跳线程：每 2 秒给所有已连接 Peer 发送 Heartbeat
+    let pool_for_heartbeat = pool.clone();
+    thread::spawn(move || {
+        loop {
+            thread::sleep(std::time::Duration::from_secs(2));
+            let my_id = crate::config::load_config().device_id;
+            if crate::network::leader::is_leader(&my_id) {
+                let heartbeat = NetworkMessage::Heartbeat;
+                let conns: Vec<Connection> = {
+                    let p = pool_for_heartbeat.lock().unwrap();
+                    p.values().cloned().collect()
+                };
+                for conn in conns {
+                    let _ = conn.send_message(&heartbeat);
+                }
+            }
+        }
+    });
 
     thread::spawn(move || {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
+                    let current = active_count.fetch_add(1, Ordering::Relaxed);
+                    if current >= MAX_CONNECTIONS {
+                        active_count.fetch_sub(1, Ordering::Relaxed);
+                        eprintln!("[network] connection limit reached ({}), dropping new connection", MAX_CONNECTIONS);
+                        continue;
+                    }
                     let pool = pool.clone();
                     let app_handle = app_handle.clone();
+                    let active_count = active_count.clone();
                     thread::spawn(move || {
-                        handle_incoming(stream, pool, app_handle);
+                        // 确保无论 handle_incoming 是否正常返回或 panic，计数器都正确递减
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            handle_incoming(stream, pool, app_handle);
+                        }));
+                        active_count.fetch_sub(1, Ordering::Relaxed);
+                        if let Err(e) = result {
+                            eprintln!("[network] handle_incoming panicked: {:?}", e);
+                        }
                     });
                 }
                 Err(_) => {}
@@ -44,6 +112,7 @@ pub fn start_server(
 fn handle_incoming(stream: TcpStream, pool: ConnectionPool, app_handle: tauri::AppHandle) {
     stream.set_nonblocking(false).ok();
 
+    let peer_addr = stream.peer_addr().ok();
     let mut conn = Connection::new(String::new(), stream);
 
     match conn.read_message() {
@@ -77,10 +146,18 @@ fn handle_incoming(stream: TcpStream, pool: ConnectionPool, app_handle: tauri::A
                             p.remove(&peer_id);
                         }
                     }
+                    // 清理该 peer 未完成的文件分块接收，避免句柄泄漏
+                    cleanup_peer_chunks(&peer_id);
+                } else {
+                    eprintln!("[network] handshake missing peer_id from {:?}", peer_addr);
                 }
+            } else {
+                eprintln!("[network] handshake JSON parse failed from {:?}", peer_addr);
             }
         }
-        Err(_) => {}
+        Err(e) => {
+            eprintln!("[network] handshake read failed: {}", e);
+        }
     }
 }
 
@@ -90,14 +167,73 @@ pub(crate) fn process_message(
     app_handle: &tauri::AppHandle,
     pool: &ConnectionPool,
 ) {
-    if let Ok(msg) = serde_json::from_slice::<NetworkMessage>(data) {
+    let msg = match serde_json::from_slice::<NetworkMessage>(data) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("[server] failed to parse NetworkMessage from {}: {}", peer_id, e);
+            return;
+        }
+    };
+    // Leader 转发逻辑：将来自 Peer 的原始消息 Relay 给其他所有 Peer（Heartbeat 不转发）
+        let my_id = crate::config::load_config().device_id;
+        // Leader 转发：排除 Heartbeat（维持连接）、FileIndexRequest/FileSearchRequest（Leader-only，无需转发）
+        if crate::network::leader::is_leader(&my_id) && peer_id != my_id
+            && !matches!(msg, NetworkMessage::Heartbeat)
+            && !matches!(msg, NetworkMessage::FileIndexRequest { .. })
+            && !matches!(msg, NetworkMessage::FileSearchRequest { .. })
+        {
+            // 拒绝嵌套 Relay（防止恶意 peer 构造嵌套包）
+            if matches!(msg, NetworkMessage::Relay { .. }) {
+                eprintln!("[server] dropping nested Relay from {}", peer_id);
+                return;
+            }
+            let relay = NetworkMessage::Relay {
+                origin_peer_id: peer_id.to_string(),
+                payload: Box::new(msg.clone()),
+            };
+            let conns: Vec<Connection> = {
+                let p = pool.lock().unwrap();
+                p.values().cloned().collect()
+            };
+            for conn in conns {
+                if conn.peer_id != peer_id {
+                    if let Err(e) = conn.send_message(&relay) {
+                        eprintln!("[network] leader relay to {} failed: {}", conn.peer_id, e);
+                        let mut p = pool.lock().unwrap();
+                        if let Some(c) = p.get(&conn.peer_id) {
+                            if c.id == conn.id {
+                                p.remove(&conn.peer_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         match &msg {
-            NetworkMessage::ChatMessage { id, sender_id, sender_name, content, message_type } => {
+            NetworkMessage::ChatMessage { id, sender_id: _claimed_sender_id, sender_name: _claimed_sender_name, content, message_type } => {
+                // 安全：以 TCP 连接 handshake 中的 peer_id 作为可信来源，
+                // 拒绝消息中伪造的 sender_id/sender_name
+                let trusted_sender_id = peer_id.to_string();
+                let trusted_sender_name = {
+                    if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
+                        if let Ok(conn) = db.lock() {
+                            // 尝试从本地 chat_messages 找到该 peer 之前使用过的 sender_name
+                            let name: Result<String, _> = conn.query_row(
+                                "SELECT sender_name FROM chat_messages WHERE sender_id = ?1 ORDER BY timestamp DESC LIMIT 1",
+                                [&trusted_sender_id],
+                                |row| row.get(0),
+                            );
+                            name.ok()
+                        } else { None }
+                    } else { None }
+                }.unwrap_or_else(|| trusted_sender_id.clone());
+                
                 if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
                     if let Ok(conn) = db.lock() {
                         let _ = conn.execute(
                             "INSERT OR REPLACE INTO chat_messages (id, sender_id, sender_name, content, message_type, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                            rusqlite::params![id, sender_id, sender_name, content, message_type, chrono::Utc::now().timestamp()],
+                            rusqlite::params![id, &trusted_sender_id, &trusted_sender_name, content, message_type, chrono::Utc::now().timestamp()],
                         );
                     }
                 }
@@ -105,7 +241,13 @@ pub(crate) fn process_message(
                     "network-message",
                     serde_json::json!({
                         "peer_id": peer_id,
-                        "message": msg
+                        "message": NetworkMessage::ChatMessage {
+                            id: id.clone(),
+                            sender_id: trusted_sender_id,
+                            sender_name: trusted_sender_name,
+                            content: content.clone(),
+                            message_type: message_type.clone(),
+                        }
                     }),
                 );
             }
@@ -133,10 +275,23 @@ pub(crate) fn process_message(
                 folder_id,
                 file_path,
             } => {
-                // 尝试通过 SyncEngine 响应文件请求
-                if let Some(engine) = app_handle.try_state::<std::sync::Arc<crate::file_sync::engine::SyncEngine>>() {
-                    if let Some(response) = engine.try_handle_file_request(folder_id, file_path) {
-                        let _ = crate::network::client::send_to_peer(pool, peer_id, &response);
+                // 查询本地路径并直接分块发送
+                let local_path_opt = if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
+                    if let Ok(conn) = db.lock() {
+                        conn.query_row(
+                            "SELECT local_path FROM shared_folders WHERE id = ?1",
+                            [folder_id],
+                            |row| row.get::<_, String>(0),
+                        ).ok()
+                    } else { None }
+                } else { None };
+
+                if let Some(folder_local_path) = local_path_opt {
+                    let full_path = std::path::Path::new(&folder_local_path).join(file_path);
+                    if let Some(full_path_str) = full_path.to_str() {
+                        let _ = crate::network::client::send_file_in_chunks(
+                            pool, peer_id, folder_id, file_path, full_path_str,
+                        );
                     }
                 }
                 let _ = app_handle.emit(
@@ -154,10 +309,9 @@ pub(crate) fn process_message(
                 file_path,
                 content_base64,
             } => {
+                // 保留兼容：小文件或旧版本仍可能使用 FileResponse
                 if folder_id.is_empty() {
-                    // 点对点文件传输
                     let download_dir = crate::config::get_effective_download_dir(app_handle);
-                    
                     let file_name = std::path::Path::new(&file_path)
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -166,15 +320,12 @@ pub(crate) fn process_message(
                     if let Ok(content) = base64::engine::general_purpose::STANDARD.decode(content_base64) {
                         std::fs::write(&file_path_full, content).ok();
                     }
-                    
-                    // 通知前端有新文件到达
                     let _ = app_handle.emit("file-received", serde_json::json!({
                         "file_name": file_path,
                         "download_path": file_path_full.to_string_lossy().to_string(),
                         "peer_id": peer_id,
                     }));
                 } else {
-                    // 共享文件夹同步（已有逻辑）
                     let _ = app_handle.emit(
                         "file-sync",
                         serde_json::json!({
@@ -186,6 +337,123 @@ pub(crate) fn process_message(
                     );
                 }
             }
+            NetworkMessage::FileChunk { folder_id, file_path, chunk_index, total_chunks, data_base64 } => {
+                // 安全：拒绝路径遍历和绝对路径
+                if !is_path_safe(file_path) {
+                    eprintln!("[server] FileChunk path traversal blocked: {}", file_path);
+                    return;
+                }
+                let key = format!("{}:{}:{}", peer_id, folder_id, file_path);
+                let mut map = chunk_receives().lock().unwrap();
+                // 如果收到 chunk 0 且已有同 key 状态，说明是新传输，重置旧状态
+                if *chunk_index == 0 && map.contains_key(&key) {
+                    map.remove(&key);
+                }
+                if !map.contains_key(&key) {
+                    // 使用 .part 临时文件，避免多 peer 同时写同一目标文件导致损坏
+                    let target_path = if folder_id.is_empty() {
+                        crate::config::get_effective_download_dir(app_handle).join(file_path)
+                    } else {
+                        let folder_local = if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
+                            if let Ok(conn) = db.lock() {
+                                conn.query_row(
+                                    "SELECT local_path FROM shared_folders WHERE id = ?1",
+                                    [folder_id],
+                                    |row| row.get::<_, String>(0),
+                                ).ok()
+                            } else { None }
+                        } else { None };
+                        match folder_local {
+                            Some(p) => std::path::Path::new(&p).join(file_path),
+                            None => {
+                                eprintln!("[file_chunk] unknown folder_id: {}", folder_id);
+                                return;
+                            }
+                        }
+                    };
+                    if let Some(parent) = target_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let part_path = target_path.with_extension("part");
+                    match OpenOptions::new().write(true).create(true).truncate(true).open(&part_path) {
+                        Ok(file) => {
+                            map.insert(key.clone(), ChunkReceive {
+                                file,
+                                received: HashSet::new(),
+                                total_chunks: *total_chunks,
+                            });
+                        }
+                        Err(e) => {
+                            eprintln!("[file_chunk] failed to open {}: {}", target_path.display(), e);
+                            return;
+                        }
+                    }
+                }
+                // 将写入和完成检查放在闭包中，避免 state 借用与 map.remove 冲突
+                let maybe_complete: Option<std::path::PathBuf> = {
+                    let state = map.get_mut(&key).unwrap();
+                    match base64::engine::general_purpose::STANDARD.decode(data_base64) {
+                        Ok(data) => {
+                            let offset = (*chunk_index as u64) * (CHUNK_SIZE as u64);
+                            if let Err(e) = state.file.seek(SeekFrom::Start(offset)) {
+                                eprintln!("[file_chunk] seek failed: {}", e);
+                                None
+                            } else if let Err(e) = state.file.write_all(&data) {
+                                eprintln!("[file_chunk] write failed: {}", e);
+                                None
+                            } else {
+                                state.received.insert(*chunk_index);
+                                if state.received.len() as u32 == state.total_chunks {
+                                    let _ = state.file.flush();
+                                    let final_target = if folder_id.is_empty() {
+                                        crate::config::get_effective_download_dir(app_handle).join(file_path)
+                                    } else {
+                                        let folder_local = if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
+                                            if let Ok(conn) = db.lock() {
+                                                conn.query_row(
+                                                    "SELECT local_path FROM shared_folders WHERE id = ?1",
+                                                    [folder_id],
+                                                    |row| row.get::<_, String>(0),
+                                                ).ok()
+                                            } else { None }
+                                        } else { None };
+                                        match folder_local {
+                                            Some(p) => std::path::Path::new(&p).join(file_path),
+                                            None => return,
+                                        }
+                                    };
+                                    Some(final_target)
+                                } else {
+                                    None
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[file_chunk] base64 decode failed: {}", e);
+                            None
+                        }
+                    }
+                };
+                if let Some(final_target) = maybe_complete {
+                    map.remove(&key);
+                    drop(map);
+                    let part_path = final_target.with_extension("part");
+                    let _ = std::fs::rename(&part_path, &final_target);
+                    if folder_id.is_empty() {
+                        let _ = app_handle.emit("file-received", serde_json::json!({
+                            "file_name": file_path,
+                            "download_path": final_target.to_string_lossy().to_string(),
+                            "peer_id": peer_id,
+                        }));
+                    } else {
+                        let _ = app_handle.emit("file-sync", serde_json::json!({
+                            "type": "file_response_complete",
+                            "folder_id": folder_id,
+                            "file_path": file_path,
+                        }));
+                    }
+                }
+            }
             NetworkMessage::ScreenShare { frame_base64 } => {
                 let _ = app_handle.emit("screen-share", serde_json::json!({
                     "peer_id": peer_id,
@@ -193,6 +461,11 @@ pub(crate) fn process_message(
                 }));
             }
             NetworkMessage::FileIndexBroadcast { peer_id: sender_id, peer_name, files } => {
+                // 安全：验证消息中的 peer_id 与 TCP 连接来源一致，拒绝伪造
+                if sender_id != peer_id {
+                    eprintln!("[server] FileIndexBroadcast sender_id mismatch: expected {}, got {}", peer_id, sender_id);
+                    return;
+                }
                 if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
                     crate::file_index::network::handle_index_broadcast(sender_id, peer_name, files.clone(), &db);
                 }
@@ -203,8 +476,12 @@ pub(crate) fn process_message(
                 }));
             }
             NetworkMessage::FileIndexRequest { requester_id } => {
+                let my_id = crate::config::load_config().device_id;
+                // 星型拓扑：只有 Leader 有所有 Peer 的连接，非 Leader 无法直接响应
+                if !crate::network::leader::is_leader(&my_id) {
+                    return;
+                }
                 if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
-                    let my_id = crate::config::load_config().device_id;
                     let my_name = crate::config::load_config().username;
                     let files = match crate::file_index::indexer::search_local("", &db) {
                         Ok(f) => f,
@@ -219,8 +496,12 @@ pub(crate) fn process_message(
                 }
             }
             NetworkMessage::FileSearchRequest { requester_id, query } => {
+                let my_id = crate::config::load_config().device_id;
+                // 星型拓扑：只有 Leader 能直接响应请求者
+                if !crate::network::leader::is_leader(&my_id) {
+                    return;
+                }
                 if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
-                    let my_id = crate::config::load_config().device_id;
                     crate::file_index::network::handle_search_request(requester_id, &query, pool, &db, &my_id);
                 }
             }
@@ -230,7 +511,9 @@ pub(crate) fn process_message(
                 }
             }
             NetworkMessage::FileTransferRequest { requester_id, file_path } => {
-                crate::file_index::network::handle_transfer_request(requester_id, file_path, pool);
+                if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
+                    crate::file_index::network::handle_transfer_request(requester_id, file_path, pool, &db);
+                }
             }
             NetworkMessage::StateSync { table, data, .. } => {
                 if table == "shared_folders" {
@@ -242,29 +525,33 @@ pub(crate) fn process_message(
                         }
                     }
                 } else if table == "ai_config" {
-                    if let Ok(config) = serde_json::from_value::<crate::models::AiConfig>(data.clone()) {
-                        if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
-                            if let Ok(conn) = db.lock() {
-                                let _ = conn.execute(
-                                    "INSERT OR REPLACE INTO ai_config (id, api_key, base_url, model, updated_at) VALUES (1, ?1, ?2, ?3, ?4)",
-                                    [&config.api_key, &config.base_url, &config.model, &config.updated_at.to_string()],
-                                );
-                            }
-                        }
-                    }
+                    // 安全：ai_config 包含 API 密钥，拒绝通过网络同步覆盖
+                    eprintln!("[network] rejected remote ai_config sync from {}", peer_id);
                 } else if table == "tasks" {
                     if let Ok(tasks) = serde_json::from_value::<Vec<crate::models::Task>>(data.clone()) {
                         if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
                             if let Ok(conn) = db.lock() {
                                 for task in tasks {
+                                    let now_ts = chrono::Utc::now().timestamp();
+                                    let updated_at = task.updated_at.unwrap_or(now_ts);
+                                    // 版本检查：本地更新则拒绝旧版本覆盖
+                                    let local_updated_at: i64 = conn.query_row(
+                                        "SELECT updated_at FROM tasks WHERE id = ?1",
+                                        [&task.id],
+                                        |row| row.get(0),
+                                    ).unwrap_or(0);
+                                    if local_updated_at >= updated_at {
+                                        continue;
+                                    }
                                     let attached = serde_json::to_string(&task.attached_files).unwrap_or_default();
+                                    let created_at = task.created_at.unwrap_or(now_ts);
                                     let _ = conn.execute(
                                         "INSERT OR REPLACE INTO tasks (id, title, project, deadline, contact, priority, description, status, creator_id, assignee_id, is_team_visible, attached_files, archived_to_folder_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                                         rusqlite::params![
                                             task.id, task.title, task.project, task.deadline, task.contact,
                                             task.priority.to_string(), task.description, task.status.to_string(),
                                             task.creator_id, task.assignee_id, task.is_team_visible as i32, attached,
-                                            task.archived_to_folder_id, task.created_at, task.updated_at,
+                                            task.archived_to_folder_id, created_at, updated_at,
                                         ],
                                     );
                                 }
@@ -276,6 +563,15 @@ pub(crate) fn process_message(
                         if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
                             if let Ok(conn) = db.lock() {
                                 for item in list {
+                                    // 版本检查：本地更新则拒绝旧版本覆盖
+                                    let local_updated_at: i64 = conn.query_row(
+                                        "SELECT updated_at FROM announcements WHERE id = ?1",
+                                        [&item.id],
+                                        |row| row.get(0),
+                                    ).unwrap_or(0);
+                                    if local_updated_at >= item.updated_at {
+                                        continue;
+                                    }
                                     let _ = conn.execute(
                                         "INSERT OR REPLACE INTO announcements (id, title, content, is_pinned, created_by, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                                         rusqlite::params![item.id, item.title, item.content, item.is_pinned as i32, item.created_by, item.updated_at],
@@ -293,7 +589,27 @@ pub(crate) fn process_message(
                     }),
                 );
             }
-
+            NetworkMessage::Heartbeat => {
+                // 非 Leader 收到 Heartbeat 后回复，维持 Leader 端连接活跃
+                let my_id = crate::config::load_config().device_id;
+                if !crate::network::leader::is_leader(&my_id) {
+                    if let Some(leader_id) = crate::network::leader::get_leader_id() {
+                        if leader_id == peer_id {
+                            let _ = crate::network::client::send_to_peer(pool, &leader_id, &NetworkMessage::Heartbeat);
+                        }
+                    }
+                }
+            }
+            NetworkMessage::Relay { origin_peer_id, payload } => {
+                // 拒绝嵌套 Relay，防止栈溢出
+                if matches!(payload.as_ref(), NetworkMessage::Relay { .. }) {
+                    eprintln!("[server] dropping nested Relay from {}", origin_peer_id);
+                    return;
+                }
+                let payload_data = serde_json::to_vec(payload).unwrap_or_default();
+                if !payload_data.is_empty() {
+                    process_message(origin_peer_id, &payload_data, app_handle, pool);
+                }
+            }
         }
     }
-}

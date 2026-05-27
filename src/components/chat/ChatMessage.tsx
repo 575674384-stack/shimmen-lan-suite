@@ -26,7 +26,7 @@ export default function ChatMessageBubble({ message, isSelf, myAvatarBase64, myA
   const [previewPath, setPreviewPath] = useState('');
   const [previewName, setPreviewName] = useState('');
 
-  const time = new Date(message.timestamp).toLocaleTimeString('zh-CN', {
+  const time = new Date(message.timestamp * 1000).toLocaleTimeString('zh-CN', {
     hour: '2-digit',
     minute: '2-digit',
   });

@@ -34,7 +34,7 @@ export function useChat() {
           sender_name: msg.sender_name,
           type: msg.message_type as 'text' | 'file' | 'image',
           content: msg.content,
-          timestamp: msg.timestamp * 1000,
+          timestamp: msg.timestamp,
         }));
         setMessages(formatted);
       } catch (e) {
@@ -56,9 +56,13 @@ export function useChat() {
             sender_name: msg.payload.sender_name,
             type: msg.payload.message_type,
             content: msg.payload.content,
-            timestamp: Date.now(),
+            timestamp: Math.floor(Date.now() / 1000),
           };
-          setMessages((prev) => [...prev, chatMsg]);
+          setMessages((prev) => {
+            const next = [...prev, chatMsg];
+            // 限制聊天记录数量，防止内存无限增长
+            return next.length > 500 ? next.slice(next.length - 500) : next;
+          });
         } else if (msg.type === 'ClearScreen') {
           setMessages([]);
         }
@@ -80,9 +84,12 @@ export function useChat() {
         sender_name: '文件传输',
         type: 'file',
         content: payload.download_path,
-        timestamp: Date.now(),
+        timestamp: Math.floor(Date.now() / 1000),
       };
-      setMessages((prev) => [...prev, chatMsg]);
+      setMessages((prev) => {
+        const next = [...prev, chatMsg];
+        return next.length > 500 ? next.slice(next.length - 500) : next;
+      });
     });
 
     return () => {
@@ -91,15 +98,25 @@ export function useChat() {
   }, []);
 
   const sendMessage = useCallback(async (content: string, type: 'text' | 'file' | 'image' = 'text') => {
-    await invoke('send_chat_message', {
-      content,
-      message_type: type,
-    });
+    try {
+      await invoke('send_chat_message', {
+        content,
+        message_type: type,
+      });
+    } catch (e) {
+      console.error('发送消息失败:', e);
+      alert('发送消息失败: ' + ((e as any)?.message || '未知错误'));
+    }
   }, []);
 
   const clearScreen = useCallback(async () => {
-    await invoke('clear_chat_screen');
-    setMessages([]);
+    try {
+      await invoke('clear_chat_screen');
+      setMessages([]);
+    } catch (e) {
+      console.error('清屏失败:', e);
+      alert('清屏失败: ' + ((e as any)?.message || '未知错误'));
+    }
   }, []);
 
   return { messages, myId, sendMessage, clearScreen };

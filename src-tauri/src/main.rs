@@ -160,32 +160,57 @@ fn main() {
                 }
             });
 
-            // periodically connect to new peers (or reconnect lost ones)
+            // 星型拓扑：只连接 Leader，Leader 不主动 outbound
             let pool_for_connect = pool.clone();
             let peers_for_connect = peers.clone();
             let my_id_for_connect = my_id.clone();
             std::thread::spawn(move || {
-                let mut pending: std::collections::HashSet<String> = std::collections::HashSet::new();
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(3));
-                    let online = network::peer::get_online_users(&peers_for_connect);
+                    network::leader::ensure_leader(&peers_for_connect, &my_id_for_connect);
+                    let leader_id = network::leader::get_leader_id();
+                    
                     let pool_ids: std::collections::HashSet<String> = {
                         let p = pool_for_connect.lock().unwrap();
                         p.keys().cloned().collect()
                     };
-                    // Clean up pending peers that have connected
-                    pending.retain(|id| !pool_ids.contains(id));
-                    for user in online {
-                        if user.id != my_id_for_connect && !pool_ids.contains(&user.id) && !pending.contains(&user.id) {
-                            pending.insert(user.id.clone());
-                            network::client::connect_to_peer(
-                                user.id.clone(),
-                                user.ip.clone(),
-                                config::CONTROL_PORT,
-                                pool_for_connect.clone(),
-                                my_id_for_connect.clone(),
-                                app_handle_for_reconnect.clone(),
-                            );
+                    
+                    // 断开所有非 Leader 的连接
+                    if let Some(ref lid) = leader_id {
+                        let to_remove: Vec<String> = pool_ids.iter()
+                            .filter(|id| *id != lid)
+                            .cloned()
+                            .collect();
+                        if !to_remove.is_empty() {
+                            let mut p = pool_for_connect.lock().unwrap();
+                            for id in to_remove {
+                                p.remove(&id);
+                            }
+                        }
+                    }
+                    
+                    // Leader 不需要主动连接任何人
+                    if network::leader::is_leader(&my_id_for_connect) {
+                        continue;
+                    }
+                    
+                    // 非 Leader：确保已连接 Leader（直接检查 pool，不依赖 pending）
+                    if let Some(ref lid) = leader_id {
+                        if !pool_ids.contains(lid) {
+                            let leader_ip = {
+                                let peers_map = peers_for_connect.lock().unwrap();
+                                peers_map.get(lid).map(|p| p.user.ip.clone())
+                            };
+                            if let Some(ip) = leader_ip {
+                                network::client::connect_to_peer(
+                                    lid.clone(),
+                                    ip,
+                                    config::CONTROL_PORT,
+                                    pool_for_connect.clone(),
+                                    my_id_for_connect.clone(),
+                                    app_handle_for_reconnect.clone(),
+                                );
+                            }
                         }
                     }
                 }

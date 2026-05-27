@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { Key, Plus, Eye, EyeOff, Trash2, Copy, Save } from 'lucide-react';
 import type { PasswordEntry } from '../../types';
 
@@ -11,35 +12,55 @@ export default function PasswordVault() {
   const [form, setForm] = useState<Partial<PasswordEntry>>({});
 
   const load = async () => {
-    const data = await invoke<PasswordEntry[]>('get_passwords');
-    setEntries(data);
+    try {
+      const data = await invoke<PasswordEntry[]>('get_passwords');
+      setEntries(data);
+    } catch (e) {
+      console.error('获取密码失败:', e);
+    }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    const unlisten = listen('password-saved', () => {
+      load();
+    });
+    return () => { unlisten.then(f => f()); };
+  }, []);
 
   const handleSave = async () => {
     if (!form.name?.trim()) return;
-    await invoke('save_password', {
-      entry: {
-        id: editing?.id || crypto.randomUUID(),
-        name: form.name,
-        account: form.account || '',
-        password: form.password || '',
-        note: form.note || '',
-        created_by: '',
-        updated_at: Date.now(),
-      }
-    });
-    setShowAdd(false);
-    setEditing(null);
-    setForm({});
-    await load();
+    try {
+      await invoke('save_password', {
+        entry: {
+          id: editing?.id || crypto.randomUUID(),
+          name: form.name,
+          account: form.account || '',
+          password: form.password || '',
+          note: form.note || '',
+          created_by: '',
+          updated_at: Math.floor(Date.now() / 1000),
+        }
+      });
+      setShowAdd(false);
+      setEditing(null);
+      setForm({});
+      await load();
+    } catch (e) {
+      console.error('保存密码失败:', e);
+      alert('保存密码失败: ' + ((e as any)?.message || '未知错误'));
+    }
   };
 
   const handleDelete = async (id: string) => {
     if (!confirm('确定删除此密码条目？')) return;
-    await invoke('delete_password', { id });
-    await load();
+    try {
+      await invoke('delete_password', { id });
+      await load();
+    } catch (e) {
+      console.error('删除密码失败:', e);
+      alert('删除密码失败: ' + ((e as any)?.message || '未知错误'));
+    }
   };
 
   const toggleVisible = (id: string) => {

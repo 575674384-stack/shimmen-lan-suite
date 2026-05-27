@@ -55,13 +55,23 @@ export default function ScreenSharePage() {
   }, []);
 
   const handleStartShare = async () => {
-    await invoke('start_screen_share', { fps, resolution });
-    setIsSharing(true);
+    try {
+      await invoke('start_screen_share', { fps, resolution });
+      setIsSharing(true);
+    } catch (e) {
+      console.error('开始演示失败:', e);
+      alert('开始演示失败: ' + ((e as any)?.message || '未知错误'));
+    }
   };
 
   const handleStopShare = async () => {
-    await invoke('stop_screen_share');
-    setIsSharing(false);
+    try {
+      await invoke('stop_screen_share');
+      setIsSharing(false);
+    } catch (e) {
+      console.error('停止演示失败:', e);
+      alert('停止演示失败: ' + ((e as any)?.message || '未知错误'));
+    }
   };
 
   // 正在观看某人的演示

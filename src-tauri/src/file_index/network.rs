@@ -2,7 +2,6 @@ use crate::db::DbPool;
 use crate::models::{NetworkMessage, RemoteFileInfo};
 use crate::network::client;
 use crate::network::server::ConnectionPool;
-use base64::Engine;
 use tauri::Emitter;
 
 pub fn broadcast_index(db: &DbPool, pool: &ConnectionPool, my_id: &str, my_name: &str) {
@@ -71,22 +70,37 @@ pub fn handle_transfer_request(
     requester_id: &str,
     file_path: &str,
     pool: &ConnectionPool,
+    db: &DbPool,
 ) {
-    if let Ok(content) = std::fs::read(file_path) {
-        let file_name = std::path::Path::new(file_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file")
-            .to_string();
-
-        let content_base64 = base64::engine::general_purpose::STANDARD.encode(content);
-
-        let msg = NetworkMessage::FileResponse {
-            folder_id: "".to_string(),
-            file_path: file_name,
-            content_base64,
-        };
-
-        let _ = client::send_to_peer(pool, requester_id, &msg);
+    // 安全：验证请求的文件路径是否在本地已索引的文件列表中
+    let is_authorized = {
+        if let Ok(conn) = db.lock() {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM file_index WHERE file_path = ?1 AND is_local = 1",
+                [file_path],
+                |row| row.get(0),
+            ).unwrap_or(0);
+            count > 0
+        } else {
+            false
+        }
+    };
+    
+    if !is_authorized {
+        eprintln!("[file_index] rejected unauthorized transfer request for path: {}", file_path);
+        return;
     }
+    
+    if file_path.contains("..") {
+        eprintln!("[file_index] rejected path traversal attempt: {}", file_path);
+        return;
+    }
+
+    let file_name = std::path::Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file")
+        .to_string();
+
+    let _ = client::send_file_in_chunks(pool, requester_id, "", &file_name, file_path);
 }

@@ -155,39 +155,39 @@ pub fn archive_task(
     db: tauri::State<DbPool>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
-    
-    // Get task
-    let task: Task = conn.query_row(
-        "SELECT id, title, project, deadline, contact, priority, description, status, creator_id, assignee_id, is_team_visible, attached_files, archived_to_folder_id, created_at, updated_at FROM tasks WHERE id = ?1",
-        [&task_id],
-        |row| {
-            Ok(Task {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                project: row.get(2)?,
-                deadline: row.get(3)?,
-                contact: row.get(4)?,
-                priority: row.get::<_, String>(5)?.parse().unwrap_or(crate::models::Priority::Medium),
-                description: row.get(6)?,
-                status: row.get::<_, String>(7)?.parse().unwrap_or(crate::models::Status::Todo),
-                creator_id: row.get(8)?,
-                assignee_id: row.get(9)?,
-                is_team_visible: row.get::<_, i32>(10)? != 0,
-                attached_files: serde_json::from_str(&row.get::<_, String>(11)?).unwrap_or_default(),
-                archived_to_folder_id: row.get(12)?,
-                created_at: row.get(13)?,
-                updated_at: row.get(14)?,
-            })
-        },
-    ).map_err(|e| e.to_string())?;
-    
-    // Get folder path
-    let folder_path: String = conn.query_row(
-        "SELECT local_path FROM shared_folders WHERE id = ?1",
-        [&folder_id],
-        |row| row.get(0),
-    ).map_err(|e| format!("找不到共享文件夹: {}", e))?;
+    // 先查询 task 和 folder_path，然后立即释放锁（避免文件IO期间阻塞所有DB操作）
+    let (task, folder_path) = {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        let task: Task = conn.query_row(
+            "SELECT id, title, project, deadline, contact, priority, description, status, creator_id, assignee_id, is_team_visible, attached_files, archived_to_folder_id, created_at, updated_at FROM tasks WHERE id = ?1",
+            [&task_id],
+            |row| {
+                Ok(Task {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    project: row.get(2)?,
+                    deadline: row.get(3)?,
+                    contact: row.get(4)?,
+                    priority: row.get::<_, String>(5)?.parse().unwrap_or(crate::models::Priority::Medium),
+                    description: row.get(6)?,
+                    status: row.get::<_, String>(7)?.parse().unwrap_or(crate::models::Status::Todo),
+                    creator_id: row.get(8)?,
+                    assignee_id: row.get(9)?,
+                    is_team_visible: row.get::<_, i32>(10)? != 0,
+                    attached_files: serde_json::from_str(&row.get::<_, String>(11)?).unwrap_or_default(),
+                    archived_to_folder_id: row.get(12)?,
+                    created_at: row.get(13)?,
+                    updated_at: row.get(14)?,
+                })
+            },
+        ).map_err(|e| e.to_string())?;
+        let folder_path: String = conn.query_row(
+            "SELECT local_path FROM shared_folders WHERE id = ?1",
+            [&folder_id],
+            |row| row.get(0),
+        ).map_err(|e| format!("找不到共享文件夹: {}", e))?;
+        (task, folder_path)
+    }; // conn dropped here
     
     // Create archive directory
     let archive_dir = std::path::Path::new(&folder_path).join(format!("archive_{}", task_id));
@@ -222,6 +222,7 @@ pub fn archive_task(
     
     // Update task archived_to_folder_id
     let now = chrono::Utc::now().timestamp();
+    let conn = db.lock().map_err(|e| e.to_string())?;
     conn.execute(
         "UPDATE tasks SET archived_to_folder_id = ?1, updated_at = ?2 WHERE id = ?3",
         [&folder_id, &now.to_string(), &task_id],

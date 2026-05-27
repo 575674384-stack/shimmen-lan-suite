@@ -161,9 +161,13 @@ export default function ChatWindow() {
         <div className="flex items-center gap-3">
           <button
             onClick={async () => {
-              const filePath = await invoke<string | null>('select_file');
-              if (!filePath) return;
-              await handleSendFile(filePath);
+              try {
+                const filePath = await invoke<string | null>('select_file');
+                if (!filePath) return;
+                await handleSendFile(filePath);
+              } catch (e) {
+                console.error('选择文件失败:', e);
+              }
             }}
             className="p-2.5 text-text-secondary hover:text-primary hover:bg-primary-light rounded-xl transition-colors"
             title="发送文件"

@@ -149,9 +149,13 @@ export default function TeamBoard() {
                   ))}
                   <button
                     onClick={async () => {
-                      const path = await invoke<string | null>('select_file');
-                      if (path) {
-                        setForm({ ...form, attached_files: [...(form.attached_files || []), path] });
+                      try {
+                        const path = await invoke<string | null>('select_file');
+                        if (path) {
+                          setForm({ ...form, attached_files: [...(form.attached_files || []), path] });
+                        }
+                      } catch (e) {
+                        console.error('选择文件失败:', e);
                       }
                     }}
                     className="text-sm px-3 py-1.5 border border-dashed border-border rounded-lg text-text-secondary hover:text-primary hover:border-primary transition-colors"
@@ -160,9 +164,13 @@ export default function TeamBoard() {
                   </button>
                   <button
                     onClick={async () => {
-                      const path = await invoke<string | null>('select_folder');
-                      if (path) {
-                        setForm({ ...form, attached_files: [...(form.attached_files || []), path] });
+                      try {
+                        const path = await invoke<string | null>('select_folder');
+                        if (path) {
+                          setForm({ ...form, attached_files: [...(form.attached_files || []), path] });
+                        }
+                      } catch (e) {
+                        console.error('选择文件夹失败:', e);
                       }
                     }}
                     className="text-sm px-3 py-1.5 border border-dashed border-border rounded-lg text-text-secondary hover:text-primary hover:border-primary transition-colors flex items-center gap-1"

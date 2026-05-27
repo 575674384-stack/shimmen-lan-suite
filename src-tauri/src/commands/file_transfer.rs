@@ -1,9 +1,8 @@
 use tauri::command;
 use tauri::Manager;
 use crate::network::server::ConnectionPool;
-use crate::models::NetworkMessage;
-use std::fs;
 use base64::Engine;
+use std::fs;
 
 #[command]
 pub async fn send_file_to_peer(
@@ -20,18 +19,11 @@ pub async fn send_file_to_peer(
     let metadata = fs::metadata(&file_path).map_err(|e| e.to_string())?;
     let _file_size = metadata.len();
     
-    let content = fs::read(&file_path).map_err(|e| e.to_string())?;
-    let content_base64 = base64::engine::general_purpose::STANDARD.encode(&content);
-    
-    let msg = NetworkMessage::FileResponse {
-        folder_id: "".to_string(),
-        file_path: file_name,
-        content_base64,
-    };
-    
     if let Some(state) = app_handle.try_state::<ConnectionPool>() {
         let pool = state.inner();
-        crate::network::client::send_to_peer(pool, &peer_id, &msg).map_err(|e| e.to_string())?;
+        crate::network::client::send_file_in_chunks(
+            pool, &peer_id, "", &file_name, &file_path,
+        ).map_err(|e| e.to_string())?;
     } else {
         return Err("Connection pool not available".to_string());
     }

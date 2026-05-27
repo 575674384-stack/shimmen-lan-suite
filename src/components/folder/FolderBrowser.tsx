@@ -21,18 +21,27 @@ export default function FolderBrowser() {
   };
 
   const handleBrowse = async () => {
-    const selected = await invoke<string | null>('select_folder');
-    if (selected) {
-      setNewFolderPath(selected);
+    try {
+      const selected = await invoke<string | null>('select_folder');
+      if (selected) {
+        setNewFolderPath(selected);
+      }
+    } catch (e) {
+      console.error('选择文件夹失败:', e);
     }
   };
 
   const handleDeleteFolder = async (folderId: string) => {
     if (!confirm('确定取消共享此文件夹？')) return;
-    await invoke('delete_shared_folder', { id: folderId });
-    await refresh();
-    if (selectedFolder?.id === folderId) {
-      setSelectedFolder(null);
+    try {
+      await invoke('delete_shared_folder', { id: folderId });
+      await refresh();
+      if (selectedFolder?.id === folderId) {
+        setSelectedFolder(null);
+      }
+    } catch (e) {
+      console.error('取消共享文件夹失败:', e);
+      alert('取消共享文件夹失败: ' + ((e as any)?.message || '未知错误'));
     }
   };
 

@@ -5,7 +5,6 @@ use crate::models::NetworkMessage;
 use crate::network::server::ConnectionPool;
 use crate::config::load_config;
 use crate::db::DbPool;
-use base64::Engine;
 
 #[command]
 pub fn send_chat_message(
@@ -28,14 +27,13 @@ pub fn send_chat_message(
         message_type: message_type.clone(),
     };
     
-    // 保存到数据库
-    if let Ok(conn) = db.lock() {
-        if let Err(e) = conn.execute(
+    // 保存到数据库（锁 poison 时直接报错，不静默失败）
+    {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        conn.execute(
             "INSERT INTO chat_messages (id, sender_id, sender_name, message_type, content, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             [&id, &config.device_id, &config.username, &message_type, &content, &timestamp.to_string()],
-        ) {
-            eprintln!("[chat] failed to save message to db: {}", e);
-        }
+        ).map_err(|e| format!("保存消息到数据库失败: {}", e))?;
     }
     
     // 广播给所有 peers
@@ -56,11 +54,11 @@ pub fn send_chat_message(
 pub fn clear_chat_screen(app_handle: tauri::AppHandle, db: tauri::State<DbPool>) -> Result<(), String> {
     let msg = NetworkMessage::ClearScreen;
     
-    // 清空数据库
-    if let Ok(conn) = db.lock() {
-        if let Err(e) = conn.execute("DELETE FROM chat_messages", []) {
-            eprintln!("[chat] failed to clear chat history: {}", e);
-        }
+    // 清空数据库（锁 poison 时直接报错）
+    {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM chat_messages", [])
+            .map_err(|e| format!("清空聊天记录失败: {}", e))?;
     }
     
     if let Some(state) = app_handle.try_state::<ConnectionPool>() {
@@ -87,14 +85,10 @@ pub fn send_chat_file(
         .unwrap_or("unknown")
         .to_string();
     
-    // 读取文件内容
-    let content = std::fs::read(&file_path).map_err(|e| format!("读取文件失败: {}", e))?;
-    let content_base64 = base64::engine::general_purpose::STANDARD.encode(&content);
-    
-    // 保存到本地下载目录
+    // 保存到本地下载目录（直接复制，避免大文件载入内存）
     let download_dir = crate::config::get_effective_download_dir(&app_handle);
     let local_path = download_dir.join(&file_name);
-    std::fs::write(&local_path, &content).ok();
+    std::fs::copy(&file_path, &local_path).ok();
     
     // 先发送 file 类型的聊天消息
     let config = load_config();
@@ -108,26 +102,22 @@ pub fn send_chat_file(
         message_type: "file".to_string(),
     };
     
-    // 保存到数据库
-    if let Ok(conn) = db.lock() {
-        if let Err(e) = conn.execute(
+    // 保存到数据库（锁 poison 时直接报错）
+    {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        conn.execute(
             "INSERT INTO chat_messages (id, sender_id, sender_name, message_type, content, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             [&id, &config.device_id, &config.username, "file", &file_name, &timestamp.to_string()],
-        ) {
-            eprintln!("[chat] failed to save file message to db: {}", e);
-        }
+        ).map_err(|e| format!("保存文件消息到数据库失败: {}", e))?;
     }
     
-    // 广播 FileResponse（让接收方保存文件）
-    let file_msg = NetworkMessage::FileResponse {
-        folder_id: "".to_string(),
-        file_path: file_name,
-        content_base64,
-    };
-    
+    // 分块广播文件（经 Leader 转发给所有人）
     if let Some(state) = app_handle.try_state::<ConnectionPool>() {
-        crate::network::client::broadcast_message(state.inner(), &file_msg);
-        crate::network::client::broadcast_message(state.inner(), &chat_msg);
+        let pool = state.inner();
+        let _ = crate::network::client::broadcast_file_in_chunks(
+            pool, "", &file_name, &file_path,
+        );
+        crate::network::client::broadcast_message(pool, &chat_msg);
     }
     
     // 本地显示

@@ -177,4 +177,7 @@ pub enum NetworkMessage {
     FileSearchRequest { requester_id: String, query: String },
     FileSearchResponse { responder_id: String, results: Vec<RemoteFileInfo> },
     FileTransferRequest { requester_id: String, file_path: String },
+    FileChunk { folder_id: String, file_path: String, chunk_index: u32, total_chunks: u32, data_base64: String },
+    Heartbeat,
+    Relay { origin_peer_id: String, payload: Box<NetworkMessage> },
 }

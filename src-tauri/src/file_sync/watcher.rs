@@ -31,7 +31,14 @@ impl FolderWatcher {
                         while rx.try_recv().is_ok() {}
                         on_change();
                     }
-                    _ => {}
+                    Ok(Err(_)) => {
+                        // watcher 内部错误，短暂休眠后继续
+                        std::thread::sleep(Duration::from_millis(1000));
+                    }
+                    Err(_) => {
+                        // RecvError: watcher 已被释放，退出循环，避免 100% CPU
+                        break;
+                    }
                 }
             }
         });

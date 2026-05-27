@@ -1,9 +1,7 @@
 use tauri::command;
-use tauri::Manager;
+use tauri::Emitter;
 use crate::db::DbPool;
-use crate::models::{PasswordEntry, NetworkMessage};
-use crate::network::server::ConnectionPool;
-use crate::network::client::broadcast_message;
+use crate::models::PasswordEntry;
 use crate::config::load_config;
 
 #[command]
@@ -60,15 +58,12 @@ pub fn save_password(
         ],
     ).map_err(|e| e.to_string())?;
     
-    let msg = NetworkMessage::StateSync {
-        table: "password_entries".to_string(),
-        data: serde_json::to_value(&entry).unwrap_or_default(),
-        version: serde_json::json!({"updated_at": now}),
-    };
-    
-    if let Some(state) = app_handle.try_state::<ConnectionPool>() {
-        broadcast_message(state.inner(), &msg);
-    }
+    // 安全：密码绝不通过网络广播。仅本地保存。
+    // 如需同步，应使用端到端加密或仅同步非敏感元数据。
+    let _ = app_handle.emit("password-saved", serde_json::json!({
+        "id": entry.id,
+        "name": entry.name,
+    }));
     
     Ok(())
 }

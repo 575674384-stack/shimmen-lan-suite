@@ -32,26 +32,32 @@ pub fn start_screen_share(
     SHARING.store(true, Ordering::Relaxed);
     
     thread::spawn(move || {
-        // 预先获取显示器列表，避免每次循环重新查询
-        let monitor = match xcap::Monitor::all().ok().and_then(|m| m.into_iter().next()) {
-            Some(m) => m,
-            None => {
-                eprintln!("[screen_share] 无可用显示器");
-                SHARING.store(false, Ordering::Relaxed);
-                return;
+        // 确保无论正常退出还是 panic，SHARING 状态都被重置
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // 预先获取显示器列表，避免每次循环重新查询
+            let monitor = match xcap::Monitor::all().ok().and_then(|m| m.into_iter().next()) {
+                Some(m) => m,
+                None => {
+                    eprintln!("[screen_share] 无可用显示器");
+                    return;
+                }
+            };
+            let frame_interval = Duration::from_millis(1000 / target_fps);
+            while SHARING.load(Ordering::Relaxed) {
+                let start = Instant::now();
+                match capture_and_broadcast(&app_handle, &monitor) {
+                    Ok(_) => {}
+                    Err(e) => eprintln!("截屏失败: {:?}", e),
+                }
+                let elapsed = start.elapsed();
+                if elapsed < frame_interval {
+                    thread::sleep(frame_interval - elapsed);
+                }
             }
-        };
-        let frame_interval = Duration::from_millis(1000 / target_fps);
-        while SHARING.load(Ordering::Relaxed) {
-            let start = Instant::now();
-            match capture_and_broadcast(&app_handle, &monitor) {
-                Ok(_) => {}
-                Err(e) => eprintln!("截屏失败: {:?}", e),
-            }
-            let elapsed = start.elapsed();
-            if elapsed < frame_interval {
-                thread::sleep(frame_interval - elapsed);
-            }
+        }));
+        SHARING.store(false, Ordering::Relaxed);
+        if let Err(e) = result {
+            eprintln!("[screen_share] capture loop panicked: {:?}", e);
         }
     });
     

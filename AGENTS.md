@@ -8,7 +8,9 @@
 
 - **名称**：水门内网协同 (shimmen-lan-suite)
 - **类型**：Tauri v2 桌面应用（Windows）
-- **核心特性**：P2P 去中心化，零服务器，内网自发现
+- **当前版本**：v0.1.4
+- **核心特性**：星型拓扑内网协同，自动 Leader 选举，零服务器，内网自发现
+- **GitHub**：`575674384-stack/shimmen-lan-suite`
 
 ---
 
@@ -40,6 +42,27 @@ pub mod file_index;
 use crate::file_index::indexer::scan_directories;
 ```
 
+### 2.3 星型拓扑核心规则（切勿违反）
+
+- `device_id` 字典序最小者自动当选为 **Leader**
+- **非 Leader 只维护一条到 Leader 的 TCP 连接**
+- **Leader 维护到所有 Peer 的连接**
+- 非 Leader → 非 Leader 的消息必须经 Leader `Relay` 转发
+- Leader 离线后 8 秒内自动重新选举（read timeout）+ 3 秒内重连
+- 业务层（commands）调用 `broadcast_message` 无需感知拓扑变化
+
+### 2.4 消息转发路径
+
+```
+非 Leader A 发送消息
+  → A 的 broadcast_message 只发给 Leader
+  → Leader 收到后包装为 Relay { origin_peer_id: "A", payload: msg }
+  → Leader 转发给所有其他 Peer
+  → Peer B 收到 Relay，解包后用 origin_peer_id 调用 process_message
+```
+
+**来源可信**：`process_message` 中的 `peer_id` 来自 TCP handshake，无法伪造。`Relay` 解包后的 `origin_peer_id` 继承该可信 ID。
+
 ---
 
 ## 3. 如何新增一个功能
@@ -56,6 +79,7 @@ use crate::file_index::indexer::scan_directories;
 1. 在 `src-tauri/src/models/mod.rs` 的 `NetworkMessage` 枚举中添加变体
 2. 在 `src-tauri/src/network/server.rs` 的 `process_message` 中匹配处理
 3. 在 `src-tauri/src/network/client.rs` 中如需要可添加发送辅助函数
+4. **如果消息是点对点意图**：Leader 转发逻辑默认会广播给所有人。如需精确点对点，需在消息中添加 `target_peer_id` 字段，并修改 Leader 转发逻辑。
 
 ### 3.3 新增工具箱工具
 
@@ -76,34 +100,48 @@ use crate::file_index::indexer::scan_directories;
 
 | 组件 | 端口/方式 | 说明 |
 |------|-----------|------|
-| UDP 发现 | `23333` | 广播心跳包，维护在线节点列表 |
-| TCP 通信 | `23334` | 长度前缀 JSON 协议，所有业务消息 |
-| 消息格式 | `4字节长度 + JSON` | 见 `network/protocol.rs` |
+| UDP 发现 | `23333` | 广播心跳包，维护在线节点列表，12 秒超时清理 |
+| TCP 控制 | `23334` | 长度前缀 JSON 协议，所有业务消息 |
+| 消息格式 | `4字节长度(u32 BE) + JSON` | 见 `network/connection.rs` |
+| 最大消息 | 50 MB | 超过则断开连接 |
+| Read Timeout | 8 秒 | 检测死连接/Leader 离线 |
+| Write Timeout | 8 秒 | 防止半开连接无限阻塞 |
+| 最大连接数 | 128 | Leader 服务端软限制 |
 
 **现有消息类型（NetworkMessage）：**
-- `Heartbeat` / `Discovery` / `PeerList`
-- `ChatMessage` / `FileRequest` / `FileResponse`
-- `FolderSync` / `FileList` / `FileContent`
-- `ScreenFrame`
-- `FileIndexBroadcast` / `FileSearchRequest` / `FileSearchResponse` / `FileTransferRequest`
+- `ChatMessage` / `ClearScreen`
+- `StateSync { table, data, version }` — tasks / announcements / shared_folders / ai_config
+- `FileList` / `FileRequest` / `FileResponse` / `FileChunk`
+- `ScreenShare`
+- `FileIndexBroadcast` / `FileIndexRequest` / `FileSearchRequest` / `FileSearchResponse` / `FileTransferRequest`
+- `Heartbeat`
+- `Relay { origin_peer_id, payload }` — Leader 转发包装
+
+### 4.1 文件分块传输
+
+- `CHUNK_SIZE = 256KB`
+- 发送：`send_file_in_chunks`（点对点）/ `broadcast_file_in_chunks`（广播）
+- 接收：`FileChunk` 按 `peer_id:folder_id:file_path` key 聚合到 `.part` 临时文件
+- 收齐后 `rename` `.part` → 最终文件（避免多 peer 写竞争）
+- 连接断开时自动清理未完成传输（`cleanup_peer_chunks`）
 
 ---
 
 ## 5. 数据库
 
 - **引擎**：SQLite (bundled)
-- **连接池**：`r2d2_sqlite`
-- **类型**：`DbPool = Arc<Mutex<Connection>>`（简化版，非多连接池）
-- **Schema**：`src-tauri/src/db/schema.rs`
+- **连接池**：`DbPool = Arc<Mutex<Connection>>`（单连接串行化，简化但已够用）
+- **Schema**：`src-tauri/src/db/mod.rs`（内联创建，无独立 schema 文件）
+- ⚠️ **无 Schema 版本迁移逻辑**。新增列/改约束需手动处理或提示用户删除旧数据库。
 
 **主要表：**
-- `users` - 本机用户信息
-- `messages` - 聊天记录
-- `tasks` - 看板任务
-- `announcements` - 公告
-- `shared_folders` - 共享文件夹配置
-- `file_index` - 跨机文件索引
-- `file_versions` - 文件夹同步版本历史
+- `chat_messages` — 聊天记录（前端显示最近 200 条）
+- `tasks` — 看板任务（`version` 列当前未使用，仅 `updated_at` 做冲突检查）
+- `announcements` — 公告
+- `password_entries` — 密码（**绝不网络同步**，本地 AES-GCM 加密）
+- `shared_folders` — 共享文件夹配置
+- `file_index` — 跨机文件索引（本地表，`AUTOINCREMENT`）
+- `users` — 预留表，当前未实际使用
 
 ---
 
@@ -141,7 +179,7 @@ use crate::file_index::indexer::scan_directories;
 
 ```bash
 # 前端类型检查
-npx tsc --noEmit
+cd src && npx tsc --noEmit
 
 # Rust 开发检查
 cd src-tauri && cargo check
@@ -164,6 +202,7 @@ npx tauri build
 - **前端状态**：React `useState` + 少量 `useCallback`；复杂状态暂未引入全局管理
 - **图标**：优先使用 `lucide-react`；自定义图标放在 `AppIcons.tsx`，支持渐变色 SVG
 - **样式**：Tailwind CSS 优先；无边框窗口（`decorations: false`），自定义标题栏
+- **时间戳统一**：前端 `Math.floor(Date.now() / 1000)`（秒），后端 `chrono::Utc::now().timestamp()`（秒），显示时 `* 1000`
 
 ---
 
@@ -174,6 +213,10 @@ npx tauri build
 - **文件传输复用**：跨机搜索的文件传输通过构造 `FileTransferRequest` → 服务端响应 `FileResponse`（base64），复用现有文件接收逻辑保存到 downloads 目录
 - **WebView2 兼容**：启动时检测 WebView2 运行时，NSIS 安装包已嵌入 `embedBootstrapper`
 - **自启动**：支持 `--minimized` 参数静默启动，配合注册表实现开机自启。设置面板提供开关控制
+- **密码加密**：AES-256-GCM，随机 nonce（12 字节），格式 `base64(nonce || ciphertext)`。`decrypt_password` 向后兼容旧格式（固定 nonce `b"shimmen-12!!"`）
+- **路径安全**：`is_path_safe()` 检查 `..` 和绝对路径。Windows 设备名（CON/PRN/NUL 等）当前未过滤。
+
+---
 
 ## 10. 配置项清单
 
@@ -187,20 +230,99 @@ npx tauri build
 | `download_dir` | 文件接收保存路径 | 空（fallback 到 app_data_dir/downloads）|
 | `sync_interval_secs` | 共享文件夹同步间隔 | 0（实时）|
 | `autostart` | 开机自启 | false |
+| `screen_fps` | 屏幕分享帧率 | 10 |
+| `screen_resolution` | 屏幕分享分辨率 | 720 |
 
 新增配置命令：
 - `set_download_dir` / `set_sync_interval` / `set_autostart` / `get_autostart_status`
+- `set_screen_fps` / `set_screen_resolution`
 
-## 11. 代码审查历史
+---
 
-### Round 4 (本轮)
-- **chat.rs 锁内 I/O**：`send_chat_message` / `send_chat_file` / `clear_chat_screen` 改为使用 `client::broadcast_message`（连接在锁外 clone，避免网络阻塞时卡住整个 pool）
-- **screen_share.rs JPEG 兼容性**：截屏 `Rgba8` 先 `to_rgb8()` 再编码，修复 JPEG 编码器不支持 RGBA 的 panic
-- **board.rs 保留 created_at**：`save_task` 先查询原有 `created_at`，`INSERT OR REPLACE` 时不再覆盖创建时间
-- **file_index 大文件 OOM**：`indexer::index_folder` 分块读取（8MB chunks）计算 blake3 hash，避免一次性载入大文件到内存
-- **冗余 clone 清理**：`file_index/network.rs` 中 `&str` 的无意义 `.clone()` 移除
-- **discovery UDP 缓冲区**：1024 → 4096 字节，避免大包截断
-- **config 写失败加日志**：`save_config` / `.device_id` 写入失败时 `eprintln` 告警，不再静默吞掉
-- **共享文件夹定时同步**：`sync_interval_secs = 0` 启动实时 `FolderWatcher`；>0 时启动定时扫描线程，按间隔广播 `FileList`
-- **截屏质量持久化**：`screen_fps` / `screen_resolution` 加入 `AppConfig`，设置面板支持 5~30 FPS 和 450p/540p/720p 选择
-- **新增设置项**：文件接收路径、共享文件夹同步间隔、开机自启开关、截屏分享质量
+## 11. Aegis 审查历史
+
+### Round 1 — 基础安全 + 架构重构（v0.1.3 前）
+- 明文广播密码 → 设备 ID 派生密钥加密
+- ChatMessage sender_id 伪造 → TCP peer_id 作为可信来源
+- ai_config 远程覆盖 → 直接拒绝
+- 任意文件读取 (`../../`) → 路径遍历检查
+- TcpStream 并发写入 → `Arc<Mutex<TcpStream>>`
+- FolderWatcher CPU 100% → `RecvError` 后 break
+- DbPool 锁跨 I/O → 先 drop 锁再执行网络操作
+- SyncEngine 线程泄漏 → `AtomicBool` 控制退出
+- 前端时间戳毫秒/秒混乱 → 统一为秒
+- **架构重构**：P2P → 星型拓扑，自动 Leader 选举，Relay 转发
+
+### Round 2 — 网络拓扑修复（v0.1.3 → v0.1.4）
+- `pending` 设计缺陷 → Leader 断开后无法重连 → 移除 `pending`，直接检查 pool
+- `Relay` 嵌套栈溢出 → 拒绝嵌套 Relay（两处防护）
+
+### Round 3 — 数据库并发 + 线程安全（v0.1.4）
+- `archive_task` 长时间持锁 → 文件IO前释放锁
+- `chat.rs` 静默失败 → 锁 poison 时返回错误
+- Leader 转发带宽浪费 → 排除 `FileIndexRequest`/`FileSearchRequest`
+- `FileIndexBroadcast` 伪造 → 验证 sender_id == peer_id
+- `password-saved` 前端未监听 → PasswordVault 自动刷新
+- `active_count` panic 漂移 → `catch_unwind` 确保计数器递减
+- `screen_share` 状态卡死 → `catch_unwind` 确保 SHARING 重置
+- `chunk_receives` 断线泄漏 → 连接断开时清理未完成传输
+
+### Round 4 — 密码学 + 网络安全 + 数据一致性（v0.1.4）
+- AES-GCM 固定 nonce → 随机 nonce（`nonce || ciphertext` 格式）
+- `send_message` 无 write timeout → 8 秒写超时
+- `FileChunk` 路径遍历 → `..` / 绝对路径拒绝
+- `FileChunk` 多 peer 写竞争 → `.part` 临时文件 + 收齐后 rename
+- JSON 解析失败静默丢弃 → handshake 和 `process_message` 添加错误日志
+- `StateSync` 无版本检查 → `updated_at` 比较拒绝旧版本覆盖
+
+### Round 5 — 回归测试 + 前端完整性（v0.1.4）
+- 旧密码无法解密 → `decrypt_password` 向后兼容旧格式（固定 nonce）
+- Leader 断连震荡 → Peer 收到 Heartbeat 后发送 Heartbeat 回复
+- `FileChunk` 缺少 `.truncate(true)` → 新传输时清空旧文件
+- 前端 `network-message` 无差别 reload → `useTasks`/`AnnouncementBoard` 按 table 过滤
+- 聊天记录无限增长 → 限制保留最近 500 条
+
+---
+
+## 12. 已知限制（当前版本）
+
+| # | 限制 | 影响 | 缓解措施 |
+|---|------|------|---------|
+| 1 | `FileChunk` 无 `target_peer_id` | 点对点文件传输经 Leader 广播给所有 peer | 办公场景可接受；恶意场景需扩展协议 |
+| 2 | 新设备无法获取历史 tasks/announcements | 只能等待未来变动触发同步 | 手动刷新页面可重新加载本地 DB（但无网络历史）|
+| 3 | 文件同步冲突处理未实现 | 多设备同时改同一文件，后到达者覆盖 | `updated_at` 比较已应用于 tasks/announcements；文件同步仍缺 |
+| 4 | 无优雅退出机制 | `.part` 文件可能残留 | 连接断开时 `cleanup_peer_chunks` 清理；应用强杀时无法保证 |
+| 5 | 无 Schema 迁移逻辑 | 后续版本新增列需手动处理 | `CREATE TABLE IF NOT EXISTS` 保证新安装正常；升级需删除旧 DB |
+| 6 | Windows 保留设备名未过滤 | `NUL`/`CON` 等特殊文件名可能打开系统设备 | `is_path_safe` 已检查 `..` 和绝对路径；设备名过滤待补充 |
+| 7 | 未使用函数警告 | 7 个预留接口 | 不影响运行 |
+
+---
+
+## 13. 关键代码路径速查
+
+```
+启动流程（main.rs setup）：
+  1. 创建 app_dir
+  2. init_db → DbPool
+  3. manage(DbPool)
+  4. setup_tray
+  5. create_peer_map → manage(PeerMap)
+  6. create_connection_pool → manage(ConnectionPool)
+  7. create_folder_cache → manage(RemoteFolderCache)
+  8. spawn start_server (TCP)
+  9. spawn start_discovery (UDP, delay 1s)
+  10. create SyncEngine → manage(SyncEngine)
+  11. spawn 恢复监控已同步文件夹
+  12. spawn 广播共享文件夹 (delay 2s)
+  13. spawn 文件索引扫描 + 广播 (delay 5s)
+  14. spawn 重连线程 (loop 3s)
+
+网络消息处理（server.rs）：
+  handle_incoming → read handshake → insert pool → read loop → process_message
+  process_message → Leader 转发 → match msg → 各分支处理
+
+Leader 选举（leader.rs）：
+  elect_leader = online peers + my_id → sort → 最小 ID
+  ensure_leader = 重新计算并设置
+  should_connect_to = 非 Leader 只连接 Leader
+```
