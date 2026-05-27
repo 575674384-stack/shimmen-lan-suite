@@ -83,7 +83,13 @@ pub fn start_discovery(config: AppConfig, peers: PeerMap, app_handle: tauri::App
                         }
                     }
                 }
-                Err(_) => {}
+                Err(e) => {
+                    let err_kind = e.raw_os_error();
+                    // 致命错误（非 WouldBlock/TimedOut）时 sleep 避免 busy-loop
+                    if err_kind != Some(10035) && err_kind != Some(10060) {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                }
             }
         }
     });

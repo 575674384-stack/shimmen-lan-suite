@@ -127,9 +127,22 @@ pub fn list_folder_files(path: String) -> Result<Vec<serde_json::Value>, String>
 }
 
 #[command]
-pub fn delete_shared_folder(id: String, db: tauri::State<DbPool>) -> Result<(), String> {
+pub fn delete_shared_folder(id: String, db: tauri::State<DbPool>, app_handle: tauri::AppHandle) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM shared_folders WHERE id = ?1", [&id])
         .map_err(|e| e.to_string())?;
+    drop(conn);
+    
+    // Broadcast deletion to all peers
+    if let Ok(folders) = get_my_shared_folders(db) {
+        let msg = crate::models::NetworkMessage::StateSync {
+            table: "shared_folders".to_string(),
+            data: serde_json::to_value(&folders).unwrap_or(serde_json::Value::Null),
+            version: serde_json::json!({}),
+        };
+        if let Some(state) = app_handle.try_state::<crate::network::server::ConnectionPool>() {
+            crate::network::client::broadcast_message(state.inner(), &msg);
+        }
+    }
     Ok(())
 }

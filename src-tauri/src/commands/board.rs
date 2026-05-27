@@ -60,7 +60,7 @@ pub fn save_task(task: Task, db: tauri::State<DbPool>, app_handle: tauri::AppHan
             task.priority.to_string(),
             task.description.clone(),
             task.status.to_string(),
-            config.device_id,
+            if task.creator_id.is_empty() { config.device_id } else { task.creator_id.clone() },
             task.assignee_id.clone().unwrap_or_default(),
             if task.is_team_visible { "1".to_string() } else { "0".to_string() },
             serde_json::to_string(&task.attached_files).unwrap_or_default(),
@@ -111,9 +111,10 @@ pub fn delete_task(id: String, db: tauri::State<DbPool>, app_handle: tauri::AppH
     drop(conn);
     
     if let Ok(tasks) = get_tasks(db) {
+        let visible_tasks: Vec<Task> = tasks.into_iter().filter(|t| t.is_team_visible).collect();
         let msg = NetworkMessage::StateSync {
             table: "tasks".to_string(),
-            data: serde_json::to_value(&tasks).unwrap_or(serde_json::Value::Null),
+            data: serde_json::to_value(&visible_tasks).unwrap_or(serde_json::Value::Null),
             version: serde_json::json!({}),
         };
         if let Some(state) = app_handle.try_state::<ConnectionPool>() {
@@ -134,9 +135,10 @@ pub fn update_task_status(id: String, status: String, db: tauri::State<DbPool>, 
     drop(conn);
     
     if let Ok(tasks) = get_tasks(db) {
+        let visible_tasks: Vec<Task> = tasks.into_iter().filter(|t| t.is_team_visible).collect();
         let msg = NetworkMessage::StateSync {
             table: "tasks".to_string(),
-            data: serde_json::to_value(&tasks).unwrap_or(serde_json::Value::Null),
+            data: serde_json::to_value(&visible_tasks).unwrap_or(serde_json::Value::Null),
             version: serde_json::json!({}),
         };
         if let Some(state) = app_handle.try_state::<ConnectionPool>() {
@@ -227,9 +229,10 @@ pub fn archive_task(
     drop(conn);
     
     if let Ok(tasks) = get_tasks(db) {
+        let visible_tasks: Vec<Task> = tasks.into_iter().filter(|t| t.is_team_visible).collect();
         let msg = NetworkMessage::StateSync {
             table: "tasks".to_string(),
-            data: serde_json::to_value(&tasks).unwrap_or(serde_json::Value::Null),
+            data: serde_json::to_value(&visible_tasks).unwrap_or(serde_json::Value::Null),
             version: serde_json::json!({}),
         };
         if let Some(state) = app_handle.try_state::<ConnectionPool>() {

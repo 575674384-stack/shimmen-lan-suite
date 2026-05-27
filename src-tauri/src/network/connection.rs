@@ -1,11 +1,12 @@
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct Connection {
     pub peer_id: String,
-    pub stream: TcpStream,
+    pub stream: Arc<TcpStream>,
     pub id: String,
 }
 
@@ -13,8 +14,7 @@ impl Clone for Connection {
     fn clone(&self) -> Self {
         Self {
             peer_id: self.peer_id.clone(),
-            stream: self.stream.try_clone()
-                .unwrap_or_else(|e| panic!("TcpStream clone failed for peer {}: {}", self.peer_id, e)),
+            stream: self.stream.clone(), // Arc::clone 永不失败
             id: self.id.clone(),
         }
     }
@@ -22,14 +22,14 @@ impl Clone for Connection {
 
 impl Connection {
     pub fn new(peer_id: String, stream: TcpStream) -> Self {
-        Self { peer_id, stream, id: uuid::Uuid::new_v4().to_string() }
+        Self { peer_id, stream: Arc::new(stream), id: uuid::Uuid::new_v4().to_string() }
     }
 
     /// 发送 JSON 消息：先写 4 字节长度前缀（大端），再写 JSON 内容
     pub fn send_message<T: Serialize>(&self, msg: &T) -> std::io::Result<()> {
         let json = serde_json::to_vec(msg)?;
         let len = json.len() as u32;
-        let mut stream = &self.stream;
+        let mut stream = &*self.stream;
         stream.write_all(&len.to_be_bytes())?;
         stream.write_all(&json)?;
         stream.flush()?;
@@ -39,7 +39,7 @@ impl Connection {
     /// 读取一条消息：先读 4 字节长度，再读对应长度的 JSON
     pub fn read_message(&self) -> std::io::Result<Vec<u8>> {
         const MAX_MSG_LEN: usize = 50 * 1024 * 1024; // 50 MB cap
-        let mut stream = &self.stream;
+        let mut stream = &*self.stream;
         // Set a read timeout to prevent indefinite blocking on dead connections
         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(30)));
         let mut len_buf = [0u8; 4];

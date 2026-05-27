@@ -522,13 +522,14 @@ pub struct FileSearchResult {
 pub fn search_files(path: String, query: String, limit: i32) -> Result<Vec<FileSearchResult>, String> {
     let mut results = Vec::new();
     let query_lower = query.to_lowercase();
+    let limit_usize = if limit <= 0 { 100usize } else { limit as usize };
 
     for entry in walkdir::WalkDir::new(&path)
         .max_depth(5)
         .into_iter()
         .filter_map(|e| e.ok())
     {
-        if results.len() >= limit as usize {
+        if results.len() >= limit_usize {
             break;
         }
 
@@ -897,7 +898,9 @@ pub fn get_installed_software() -> Result<Vec<SoftwareInfo>, String> {
 #[command]
 pub fn install_software(download_url: String, installer_args: String) -> Result<String, String> {
     let temp_dir = std::env::temp_dir();
-    let file_name = download_url.split('/').last().unwrap_or("installer.exe");
+    let file_name = download_url
+        .split('?').next().unwrap_or(&download_url)
+        .split('/').last().unwrap_or("installer.exe");
     let installer_path = temp_dir.join(file_name);
 
     let resp = ureq::get(&download_url)
@@ -1000,8 +1003,8 @@ pub fn get_printers() -> Result<Vec<PrinterInfo>, String> {
 #[command]
 pub fn get_print_jobs(printer_name: String) -> Result<Vec<PrintJob>, String> {
     let ps_cmd = format!(
-        r#"Get-PrintJob -PrinterName '{}' | Select-Object Id, DocumentName, JobStatus, TotalPages | ConvertTo-Json -Depth 3"#,
-        printer_name.replace('"', "\"")
+        "Get-PrintJob -PrinterName '{}' | Select-Object Id, DocumentName, JobStatus, TotalPages | ConvertTo-Json -Depth 3",
+        printer_name.replace("'", "''").replace('\"', "\x60")
     );
 
     let output = std::process::Command::new("powershell")
@@ -1036,8 +1039,8 @@ pub fn get_print_jobs(printer_name: String) -> Result<Vec<PrintJob>, String> {
 #[command]
 pub fn clear_print_queue(printer_name: String) -> Result<(), String> {
     let ps_cmd = format!(
-        r#"Get-PrintJob -PrinterName '{}' | Remove-PrintJob"#,
-        printer_name.replace('"', "\"")
+        "Get-PrintJob -PrinterName '{}' | Remove-PrintJob",
+        printer_name.replace("'", "''").replace('\"', "\x60")
     );
 
     let output = std::process::Command::new("powershell")
@@ -1135,6 +1138,22 @@ pub fn get_network_details() -> Result<Vec<NetworkDetail>, String> {
     Ok(result)
 }
 
+fn get_default_gateway() -> Option<String> {
+    // 通过 PowerShell 获取默认网关
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+            "(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Select-Object -First 1).NextHop"
+        ])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() || text == "null" {
+        None
+    } else {
+        Some(text)
+    }
+}
+
 #[command]
 pub fn get_network_status() -> Result<NetworkStatus, String> {
     // Check internet connectivity by pinging a public DNS
@@ -1145,11 +1164,13 @@ pub fn get_network_status() -> Result<NetworkStatus, String> {
         .unwrap_or(false);
 
     // Check LAN by pinging gateway
+    // 获取默认网关作为 LAN 检测目标
+    let gateway = get_default_gateway().unwrap_or_else(|| "192.168.1.1".to_string());
     let lan = if internet {
         true
     } else {
         std::process::Command::new("ping")
-            .args(["-n", "1", "-w", "1000", "192.168.1.1"])
+            .args(["-n", "1", "-w", "1000", &gateway])
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)

@@ -30,10 +30,12 @@ pub fn send_chat_message(
     
     // 保存到数据库
     if let Ok(conn) = db.lock() {
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT INTO chat_messages (id, sender_id, sender_name, message_type, content, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             [&id, &config.device_id, &config.username, &message_type, &content, &timestamp.to_string()],
-        );
+        ) {
+            eprintln!("[chat] failed to save message to db: {}", e);
+        }
     }
     
     // 广播给所有 peers
@@ -56,7 +58,9 @@ pub fn clear_chat_screen(app_handle: tauri::AppHandle, db: tauri::State<DbPool>)
     
     // 清空数据库
     if let Ok(conn) = db.lock() {
-        let _ = conn.execute("DELETE FROM chat_messages", []);
+        if let Err(e) = conn.execute("DELETE FROM chat_messages", []) {
+            eprintln!("[chat] failed to clear chat history: {}", e);
+        }
     }
     
     if let Some(state) = app_handle.try_state::<ConnectionPool>() {
@@ -106,10 +110,12 @@ pub fn send_chat_file(
     
     // 保存到数据库
     if let Ok(conn) = db.lock() {
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT INTO chat_messages (id, sender_id, sender_name, message_type, content, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             [&id, &config.device_id, &config.username, "file", &file_name, &timestamp.to_string()],
-        );
+        ) {
+            eprintln!("[chat] failed to save file message to db: {}", e);
+        }
     }
     
     // 广播 FileResponse（让接收方保存文件）

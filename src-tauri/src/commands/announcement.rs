@@ -44,7 +44,7 @@ pub fn save_announcement(
             announcement.title.clone(),
             announcement.content.clone(),
             if announcement.is_pinned { "1" } else { "0" }.to_string(),
-            config.device_id,
+            if announcement.created_by.is_empty() { config.device_id } else { announcement.created_by.clone() },
             now.to_string(),
             "[]".to_string(),
         ],

@@ -27,7 +27,7 @@ export default function FilePreviewModal({ filePath, fileName, onClose }: FilePr
     setLoading(true);
     setError('');
     try {
-      const base64 = await invoke<string>('read_file_base64', { filePath });
+      const base64 = await invoke<string>('read_file_base64', { file_path: filePath });
       const binaryString = atob(base64);
       const bytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {

@@ -10,10 +10,7 @@ interface TransferWindowProps {
 }
 
 export default function TransferWindow({ user, onClose }: TransferWindowProps) {
-  const [records, setRecords] = useState<TransferRecord[]>([
-    { id: '1', type: 'received', fileName: '项目方案.docx', fileSize: '2.4 MB', progress: 100, status: 'completed' },
-    { id: '2', type: 'sent', fileName: '截图_01.png', fileSize: '1.1 MB', progress: 100, status: 'completed' },
-  ]);
+  const [records, setRecords] = useState<TransferRecord[]>([]);
 
   useEffect(() => {
     let unlistenFn: (() => void) | null = null;

@@ -117,6 +117,10 @@ impl SyncEngine {
         file_path: &str,
         folder_local_path: &str,
     ) -> Result<NetworkMessage, Box<dyn std::error::Error>> {
+        // 路径安全：拒绝包含 .. 的路径，防止目录遍历
+        if file_path.contains("..") {
+            return Err("非法文件路径".into());
+        }
         // 创建快照
         let history_base = self.app_dir.to_string_lossy().to_string();
         let _ = history::create_snapshot(folder_local_path, file_path, &history_base);

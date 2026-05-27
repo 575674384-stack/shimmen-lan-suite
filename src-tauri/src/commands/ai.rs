@@ -1,10 +1,7 @@
 use tauri::command;
 use tauri::Emitter;
-use tauri::Manager;
 use crate::db::DbPool;
-use crate::models::{AiConfig, NetworkMessage};
-use crate::network::server::ConnectionPool;
-use crate::network::client::broadcast_message;
+use crate::models::AiConfig;
 
 #[command]
 pub fn get_ai_config(db: tauri::State<DbPool>) -> Result<AiConfig, String> {
@@ -50,26 +47,21 @@ pub fn set_ai_config(
         [&api_key, &base_url, &model, &now.to_string()],
     ).map_err(|e| e.to_string())?;
     
-    let config = AiConfig {
-        api_key,
-        base_url,
-        model,
-        updated_at: now,
-    };
-    
-    let msg = NetworkMessage::StateSync {
-        table: "ai_config".to_string(),
-        data: serde_json::to_value(&config).unwrap_or_default(),
-        version: serde_json::json!({"updated_at": now}),
-    };
-    
-    if let Some(state) = app_handle.try_state::<ConnectionPool>() {
-        broadcast_message(state.inner(), &msg);
-    }
-    
+    // ⚠️ 安全：ai_config 包含 API 密钥，绝不可广播到网络
+    // 仅本地保存，不通过 StateSync 同步
     let _ = app_handle.emit("network-message", serde_json::json!({
         "peer_id": "system",
-        "message": msg,
+        "message": {
+            "type": "StateSync",
+            "payload": {
+                "table": "ai_config",
+                "data": {
+                    "base_url": &base_url,
+                    "model": &model,
+                    "updated_at": now,
+                },
+            },
+        },
     }));
     
     Ok(())

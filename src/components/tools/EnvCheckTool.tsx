@@ -55,8 +55,8 @@ export default function EnvCheckTool() {
     setMessage('');
     try {
       const result = await invoke<string>('install_software', {
-        downloadUrl: sw.download_url,
-        installerArgs: sw.installer_args,
+        download_url: sw.download_url,
+        installer_args: sw.installer_args,
       });
       setMessage(result);
       loadSoftware();

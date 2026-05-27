@@ -32,10 +32,19 @@ pub fn start_screen_share(
     SHARING.store(true, Ordering::Relaxed);
     
     thread::spawn(move || {
+        // 预先获取显示器列表，避免每次循环重新查询
+        let monitor = match xcap::Monitor::all().ok().and_then(|m| m.into_iter().next()) {
+            Some(m) => m,
+            None => {
+                eprintln!("[screen_share] 无可用显示器");
+                SHARING.store(false, Ordering::Relaxed);
+                return;
+            }
+        };
         let frame_interval = Duration::from_millis(1000 / target_fps);
         while SHARING.load(Ordering::Relaxed) {
             let start = Instant::now();
-            match capture_and_broadcast(&app_handle) {
+            match capture_and_broadcast(&app_handle, &monitor) {
                 Ok(_) => {}
                 Err(e) => eprintln!("截屏失败: {:?}", e),
             }
@@ -55,9 +64,7 @@ pub fn stop_screen_share() -> Result<(), String> {
     Ok(())
 }
 
-fn capture_and_broadcast(app_handle: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let monitors = xcap::Monitor::all()?;
-    let monitor = monitors.first().ok_or("无屏幕")?;
+fn capture_and_broadcast(app_handle: &tauri::AppHandle, monitor: &xcap::Monitor) -> Result<(), Box<dyn std::error::Error>> {
     let image = monitor.capture_image()?;
     
     let target_res = TARGET_RES.load(Ordering::Relaxed) as u32;

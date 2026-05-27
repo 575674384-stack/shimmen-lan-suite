@@ -73,11 +73,15 @@ export default function FileSearchNetwork() {
     setLoading(false);
   }, []);
 
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+
   const handleSearch = (value: string) => {
     setQuery(value);
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
     if (value.trim()) {
-      const timeout = setTimeout(() => doSearch(value), 300);
-      return () => clearTimeout(timeout);
+      searchTimeoutRef.current = setTimeout(() => doSearch(value), 300);
     } else {
       setResults([]);
     }
