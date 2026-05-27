@@ -122,8 +122,8 @@ use crate::file_index::indexer::scan_directories;
 - `src-tauri/src/commands/update.rs` - 更新检查 / 下载安装 / 退出命令
 - `src/components/common/UpdatePrompt.tsx` - 前端更新提示条组件
 
-**发版 checklist：**
-1. 同时修改三个文件的版本号：
+**发版 checklist（必须严格执行）：**
+1. **同步修改三个文件的版本号**（缺一不可，否则更新检测会异常）：
    - `package.json` → `"version": "x.y.z"`
    - `src-tauri/Cargo.toml` → `version = "x.y.z"`
    - `src-tauri/tauri.conf.json` → `"version": "x.y.z"`
@@ -132,6 +132,8 @@ use crate::file_index::indexer::scan_directories;
 4. 上传两个 asset：
    - **Portable**：`src-tauri/target/release/shimmen-lan-suite.exe` → 重命名为 `shimmen-lan-suite-vx.y.z-portable.exe`
    - **Setup**：`src-tauri/target/release/bundle/nsis/水门内网协同_x.y.z_x64-setup.exe` → 重命名为 `shimmen-lan-suite-vx.y.z-setup.exe`（asset 名必须以 `setup.exe` 结尾，否则更新检测匹配不到）
+
+> ⚠️ **版本号同步是强制的**：`Cargo.toml` 的版本会编译进二进制，`tauri.conf.json` 的版本用于 Tauri 内部，`package.json` 的版本用于前端显示。任何一处不同步都会导致更新检测或关于页版本显示错误。
 
 ---
 
