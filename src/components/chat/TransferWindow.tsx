@@ -62,7 +62,7 @@ export default function TransferWindow({ user, onClose }: TransferWindowProps) {
       // 同时在共享聊天中发送文件消息
       await invoke('send_chat_message', {
         content: fileName,
-        message_type: 'file',
+        messageType: 'file',
       });
     } catch (err) {
       console.error('Send file failed:', err);

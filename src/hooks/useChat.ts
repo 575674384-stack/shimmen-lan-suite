@@ -101,7 +101,7 @@ export function useChat() {
     try {
       await invoke('send_chat_message', {
         content,
-        message_type: type,
+        messageType: type,
       });
     } catch (e) {
       console.error('发送消息失败:', e);
