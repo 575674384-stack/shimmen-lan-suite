@@ -1,5 +1,5 @@
 use tauri::command;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use crate::network::server::ConnectionPool;
 use crate::network::client;
 use crate::models::NetworkMessage;
@@ -45,7 +45,7 @@ pub fn start_screen_share(
             let frame_interval = Duration::from_millis(1000 / target_fps);
             while SHARING.load(Ordering::Relaxed) {
                 let start = Instant::now();
-                match capture_and_broadcast(&app_handle, &monitor) {
+                match capture_and_broadcast(&app_handle, &monitor, &cfg.device_id) {
                     Ok(_) => {}
                     Err(e) => eprintln!("截屏失败: {:?}", e),
                 }
@@ -70,7 +70,7 @@ pub fn stop_screen_share() -> Result<(), String> {
     Ok(())
 }
 
-fn capture_and_broadcast(app_handle: &tauri::AppHandle, monitor: &xcap::Monitor) -> Result<(), Box<dyn std::error::Error>> {
+fn capture_and_broadcast(app_handle: &tauri::AppHandle, monitor: &xcap::Monitor, my_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let image = monitor.capture_image()?;
     
     let target_res = TARGET_RES.load(Ordering::Relaxed) as u32;
@@ -97,14 +97,21 @@ fn capture_and_broadcast(app_handle: &tauri::AppHandle, monitor: &xcap::Monitor)
     )?;
     
     let base64 = base64::engine::general_purpose::STANDARD.encode(&buf);
+    let frame = format!("data:image/jpeg;base64,{}", base64);
     
     let msg = NetworkMessage::ScreenShare {
-        frame_base64: format!("data:image/jpeg;base64,{}", base64),
+        frame_base64: frame.clone(),
     };
     
     if let Some(pool) = app_handle.try_state::<ConnectionPool>() {
         client::broadcast_message(&pool, &msg);
     }
+    
+    // 同时推送给本地前端（演示者自己也能预览）
+    let _ = app_handle.emit("screen-share", serde_json::json!({
+        "peer_id": my_id,
+        "frame": frame,
+    }));
     
     Ok(())
 }

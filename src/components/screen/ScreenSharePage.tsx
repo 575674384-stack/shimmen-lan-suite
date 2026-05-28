@@ -31,10 +31,20 @@ export default function ScreenSharePage() {
   const [resolution, setResolution] = useState(720);
   const frameRef = useRef<HTMLImageElement>(null);
 
+  // 加载自己的 device_id
+  const [myId, setMyId] = useState('');
+  useEffect(() => {
+    invoke<{ device_id: string }>('get_config').then((config) => {
+      setMyId(config.device_id);
+    }).catch(() => {
+      setMyId('');
+    });
+  }, []);
+
   useEffect(() => {
     const unlisten = listen('screen-share', (event: any) => {
       const payload = event.payload;
-      if (payload && payload.frame) {
+      if (payload && payload.frame && payload.peer_id !== myId) {
         setCurrentFrame(payload.frame);
         setWatchingPeer(payload.peer_id);
         setSessions(prev => {
@@ -52,7 +62,7 @@ export default function ScreenSharePage() {
     return () => {
       unlisten.then(fn => fn());
     };
-  }, []);
+  }, [myId]);
 
   const handleStartShare = async () => {
     try {
