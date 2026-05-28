@@ -20,7 +20,11 @@ fn main() {
     let log_dir = dirs::data_dir()
         .map(|d| d.join("shimmen-lan-suite"))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let _ = std::fs::create_dir_all(&log_dir);
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!("[FATAL] 无法创建日志目录 {:?}: {}", log_dir, e);
+    } else if std::fs::metadata(&log_dir).map(|m| m.permissions().readonly()).unwrap_or(true) {
+        eprintln!("[WARN] 日志目录 {:?} 可能不可写", log_dir);
+    }
     let log_file = tracing_appender::rolling::daily(&log_dir, "shimmen.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(log_file);
     let subscriber = tracing_subscriber::fmt()

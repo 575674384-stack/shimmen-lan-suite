@@ -108,7 +108,9 @@ pub fn send_chat_file(
     // 保存到本地下载目录（直接复制，避免大文件载入内存）
     let download_dir = crate::config::get_effective_download_dir(&app_handle);
     let local_path = download_dir.join(&file_name);
-    std::fs::copy(&file_path, &local_path).ok();
+    if let Err(e) = std::fs::copy(&file_path, &local_path) {
+        return Err(format!("复制文件到下载目录失败: {}", e));
+    }
     
     // 先发送 file 类型的聊天消息
     let config = load_config();

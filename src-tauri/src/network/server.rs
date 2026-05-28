@@ -31,7 +31,7 @@ pub(crate) fn is_path_safe(path: &str) -> bool {
 }
 
 pub(crate) fn cleanup_peer_chunks(peer_id: &str) {
-    let mut map = chunk_receives().lock().unwrap();
+    let mut map = chunk_receives().lock().unwrap_or_else(|e| e.into_inner());
     let keys_to_remove: Vec<String> = map.keys()
         .filter(|k| k.starts_with(&format!("{}:", peer_id)))
         .cloned()
