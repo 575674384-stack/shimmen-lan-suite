@@ -184,7 +184,7 @@ impl SyncEngine {
     ) -> Option<NetworkMessage> {
         // 先查 DB 获取本地路径，然后立即释放锁
         let local_path: String = {
-            let conn = self.db.lock().ok()?;
+            let conn = self.db.get().ok()?;
             conn.query_row(
                 "SELECT local_path FROM shared_folders WHERE id = ?1",
                 rusqlite::params![folder_id],

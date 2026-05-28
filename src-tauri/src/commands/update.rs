@@ -82,7 +82,7 @@ pub fn download_and_install(download_url: String, app_handle: AppHandle) -> Resu
         let bat_path = tmp_dir.join("shimmen-update.bat");
 
         // 下载安装包
-        let download_result = (|| -> Result<(), String> {
+        let download_result = (|| -> Result<u64, String> {
             let resp = ureq::get(&download_url)
                 .set("User-Agent", "shimmen-lan-suite")
                 .call()
@@ -91,14 +91,21 @@ pub fn download_and_install(download_url: String, app_handle: AppHandle) -> Resu
             let mut file = std::fs::File::create(&installer_path)
                 .map_err(|e| format!("创建文件失败: {}", e))?;
             let mut reader = resp.into_reader();
-            std::io::copy(&mut reader, &mut file)
+            let bytes = std::io::copy(&mut reader, &mut file)
                 .map_err(|e| format!("写入文件失败: {}", e))?;
-            Ok(())
+            Ok(bytes)
         })();
 
-        if let Err(e) = download_result {
-            let _ = app_handle.emit("update-error", e);
-            return;
+        match download_result {
+            Ok(bytes) if bytes > 1_048_576 => {} // 至少 1MB
+            Ok(_) => {
+                let _ = app_handle.emit("update-error", "下载文件过小，可能不完整".to_string());
+                return;
+            }
+            Err(e) => {
+                let _ = app_handle.emit("update-error", e);
+                return;
+            }
         }
 
         // 创建自删除的批处理脚本：等待旧进程退出 -> 启动安装程序 -> 删除自己

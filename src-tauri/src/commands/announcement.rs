@@ -8,7 +8,7 @@ use crate::config::load_config;
 
 #[command]
 pub fn get_announcements(db: tauri::State<DbPool>) -> Result<Vec<Announcement>, String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     let mut stmt = conn.prepare(
         "SELECT id, title, content, is_pinned, created_by, updated_at FROM announcements ORDER BY is_pinned DESC, updated_at DESC"
     ).map_err(|e| e.to_string())?;
@@ -35,7 +35,7 @@ pub fn save_announcement(
 ) -> Result<(), String> {
     let config = load_config();
     let now = chrono::Utc::now().timestamp();
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     
     conn.execute(
         "INSERT OR REPLACE INTO announcements (id, title, content, is_pinned, created_by, updated_at, version) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -65,7 +65,7 @@ pub fn save_announcement(
 
 #[command]
 pub fn delete_announcement(id: String, db: tauri::State<DbPool>, app_handle: tauri::AppHandle) -> Result<(), String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM announcements WHERE id = ?1", [id])
         .map_err(|e| e.to_string())?;
     drop(conn);

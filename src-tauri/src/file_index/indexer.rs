@@ -26,7 +26,7 @@ pub fn is_excluded(path: &Path) -> bool {
 
 pub fn scan_directories(paths: Vec<String>, peer_id: &str, peer_name: &str, db: &DbPool) -> Result<usize, String> {
     let mut count = 0;
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
 
     conn.execute("DELETE FROM file_index WHERE peer_id = ?1 AND is_local = 1", [peer_id])
         .map_err(|e| e.to_string())?;
@@ -78,7 +78,7 @@ pub fn scan_directories(paths: Vec<String>, peer_id: &str, peer_name: &str, db: 
 }
 
 pub fn search_all(query: &str, db: &DbPool) -> Result<Vec<FileIndexEntry>, String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     let pattern = format!("%{}%", query);
 
     let mut stmt = conn.prepare(
@@ -112,14 +112,14 @@ pub fn search_all(query: &str, db: &DbPool) -> Result<Vec<FileIndexEntry>, Strin
 }
 
 pub fn clear_peer_index(peer_id: &str, db: &DbPool) -> Result<(), String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM file_index WHERE peer_id = ?1 AND is_local = 0", [peer_id])
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 pub fn insert_remote_files(peer_id: &str, peer_name: &str, files: &[crate::models::RemoteFileInfo], db: &DbPool) -> Result<(), String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
 
     conn.execute("DELETE FROM file_index WHERE peer_id = ?1 AND is_local = 0", [peer_id])
         .map_err(|e| e.to_string())?;
@@ -140,7 +140,7 @@ pub fn insert_remote_files(peer_id: &str, peer_name: &str, files: &[crate::model
 }
 
 pub fn search_local(query: &str, db: &DbPool) -> Result<Vec<crate::models::RemoteFileInfo>, String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     let pattern = format!("%{}%", query);
 
     let mut stmt = conn.prepare(

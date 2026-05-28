@@ -26,7 +26,7 @@ pub fn search_files_network(query: String, db: tauri::State<DbPool>) -> Result<V
 
 #[command]
 pub fn clear_remote_index(db: tauri::State<DbPool>) -> Result<(), String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM file_index WHERE is_local = 0", [])
         .map_err(|e| e.to_string())?;
     Ok(())

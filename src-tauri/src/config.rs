@@ -82,16 +82,24 @@ pub fn load_config() -> AppConfig {
         cfg.device_id = uuid::Uuid::new_v4().to_string();
     }
 
-    // Ensure both stores are synced
-    if let Err(e) = save_config(&cfg) {
-        eprintln!("[config] failed to save config during load: {}", e);
+    // 只在配置或 device_id 发生变化时才写盘，避免高频 I/O
+    let need_save_config = confy::load::<AppConfig>("shimmen-lan-suite", "config")
+        .map(|saved| saved.device_id != cfg.device_id || saved.username != cfg.username)
+        .unwrap_or(true);
+    if need_save_config {
+        if let Err(e) = save_config(&cfg) {
+            eprintln!("[config] failed to save config during load: {}", e);
+        }
     }
     if let Some(p) = id_file {
-        if let Err(e) = std::fs::create_dir_all(p.parent().unwrap_or(&p)) {
-            eprintln!("[config] failed to create device_id dir: {}", e);
-        }
-        if let Err(e) = std::fs::write(&p, &cfg.device_id) {
-            eprintln!("[config] failed to write device_id file: {}", e);
+        let need_write_id = std::fs::read_to_string(&p).ok().map(|s| s.trim() != cfg.device_id).unwrap_or(true);
+        if need_write_id {
+            if let Err(e) = std::fs::create_dir_all(p.parent().unwrap_or(&p)) {
+                eprintln!("[config] failed to create device_id dir: {}", e);
+            }
+            if let Err(e) = std::fs::write(&p, &cfg.device_id) {
+                eprintln!("[config] failed to write device_id file: {}", e);
+            }
         }
     }
 

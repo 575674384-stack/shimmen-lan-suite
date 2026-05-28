@@ -109,7 +109,7 @@ fn main() {
             let engine_for_monitor = sync_engine.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(1));
-                if let Ok(conn) = db_for_monitor.lock() {
+                if let Ok(conn) = db_for_monitor.get() {
                     let mut stmt = match conn.prepare(
                         "SELECT id, local_path FROM shared_folders WHERE sync_status = 'syncing'"
                     ) {
@@ -133,7 +133,7 @@ fn main() {
             let pool_for_broadcast = pool.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(2));
-                if let Ok(conn) = db_for_broadcast.lock() {
+                if let Ok(conn) = db_for_broadcast.get() {
                     if let Ok(mut stmt) = conn.prepare("SELECT id, owner_id, owner_name, local_path, name, sync_status FROM shared_folders") {
                         if let Ok(rows) = stmt.query_map([], |row| {
                             Ok(models::SharedFolder {

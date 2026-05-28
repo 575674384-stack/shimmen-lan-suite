@@ -217,7 +217,7 @@ pub(crate) fn process_message(
                 let trusted_sender_id = peer_id.to_string();
                 let trusted_sender_name = {
                     if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
-                        if let Ok(conn) = db.lock() {
+                        if let Ok(conn) = db.get() {
                             // 尝试从本地 chat_messages 找到该 peer 之前使用过的 sender_name
                             let name: Result<String, _> = conn.query_row(
                                 "SELECT sender_name FROM chat_messages WHERE sender_id = ?1 ORDER BY timestamp DESC LIMIT 1",
@@ -230,7 +230,7 @@ pub(crate) fn process_message(
                 }.unwrap_or_else(|| trusted_sender_id.clone());
                 
                 if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
-                    if let Ok(conn) = db.lock() {
+                    if let Ok(conn) = db.get() {
                         let _ = conn.execute(
                             "INSERT OR REPLACE INTO chat_messages (id, sender_id, sender_name, content, message_type, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                             rusqlite::params![id, &trusted_sender_id, &trusted_sender_name, content, message_type, chrono::Utc::now().timestamp()],
@@ -277,7 +277,7 @@ pub(crate) fn process_message(
             } => {
                 // 查询本地路径并直接分块发送
                 let local_path_opt = if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
-                    if let Ok(conn) = db.lock() {
+                    if let Ok(conn) = db.get() {
                         conn.query_row(
                             "SELECT local_path FROM shared_folders WHERE id = ?1",
                             [folder_id],
@@ -355,7 +355,7 @@ pub(crate) fn process_message(
                         crate::config::get_effective_download_dir(app_handle).join(file_path)
                     } else {
                         let folder_local = if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
-                            if let Ok(conn) = db.lock() {
+                            if let Ok(conn) = db.get() {
                                 conn.query_row(
                                     "SELECT local_path FROM shared_folders WHERE id = ?1",
                                     [folder_id],
@@ -409,7 +409,7 @@ pub(crate) fn process_message(
                                         crate::config::get_effective_download_dir(app_handle).join(file_path)
                                     } else {
                                         let folder_local = if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
-                                            if let Ok(conn) = db.lock() {
+                                            if let Ok(conn) = db.get() {
                                                 conn.query_row(
                                                     "SELECT local_path FROM shared_folders WHERE id = ?1",
                                                     [folder_id],
@@ -530,7 +530,7 @@ pub(crate) fn process_message(
                 } else if table == "tasks" {
                     if let Ok(tasks) = serde_json::from_value::<Vec<crate::models::Task>>(data.clone()) {
                         if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
-                            if let Ok(conn) = db.lock() {
+                            if let Ok(conn) = db.get() {
                                 for task in tasks {
                                     let now_ts = chrono::Utc::now().timestamp();
                                     let updated_at = task.updated_at.unwrap_or(now_ts);
@@ -561,7 +561,7 @@ pub(crate) fn process_message(
                 } else if table == "announcements" {
                     if let Ok(list) = serde_json::from_value::<Vec<crate::models::Announcement>>(data.clone()) {
                         if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
-                            if let Ok(conn) = db.lock() {
+                            if let Ok(conn) = db.get() {
                                 for item in list {
                                     // 版本检查：本地更新则拒绝旧版本覆盖
                                     let local_updated_at: i64 = conn.query_row(

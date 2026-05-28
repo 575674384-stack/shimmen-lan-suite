@@ -74,7 +74,7 @@ pub fn handle_transfer_request(
 ) {
     // 安全：验证请求的文件路径是否在本地已索引的文件列表中
     let is_authorized = {
-        if let Ok(conn) = db.lock() {
+        if let Ok(conn) = db.get() {
             let count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM file_index WHERE file_path = ?1 AND is_local = 1",
                 [file_path],

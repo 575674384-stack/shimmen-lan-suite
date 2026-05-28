@@ -6,7 +6,7 @@ use crate::network::folder_cache::RemoteFolderCache;
 
 #[command]
 pub fn get_my_shared_folders(db: tauri::State<DbPool>) -> Result<Vec<SharedFolder>, String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     let mut stmt = conn.prepare(
         "SELECT id, owner_id, owner_name, local_path, name, sync_status FROM shared_folders"
     ).map_err(|e| e.to_string())?;
@@ -49,7 +49,7 @@ pub fn create_shared_folder(
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let config = crate::config::load_config();
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     
     conn.execute(
         "INSERT INTO shared_folders (id, owner_id, owner_name, local_path, name, subscribers, sync_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -128,7 +128,7 @@ pub fn list_folder_files(path: String) -> Result<Vec<serde_json::Value>, String>
 
 #[command]
 pub fn delete_shared_folder(id: String, db: tauri::State<DbPool>, app_handle: tauri::AppHandle) -> Result<(), String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM shared_folders WHERE id = ?1", [&id])
         .map_err(|e| e.to_string())?;
     drop(conn);

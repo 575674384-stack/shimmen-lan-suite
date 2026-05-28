@@ -157,13 +157,19 @@ pub fn broadcast_message<T: serde::Serialize>(pool: &ConnectionPool, msg: &T) {
             let p = pool.lock().unwrap();
             p.values().cloned().collect()
         };
-        for conn in conns {
+        let mut to_remove: Vec<String> = Vec::new();
+        for conn in &conns {
             if let Err(e) = conn.send_message(msg) {
                 eprintln!("[network] broadcast to {} failed: {}", conn.peer_id, e);
-                let mut p = pool.lock().unwrap();
-                if let Some(c) = p.get(&conn.peer_id) {
-                    if c.id == conn.id {
-                        p.remove(&conn.peer_id);
+                to_remove.push(conn.peer_id.clone());
+            }
+        }
+        if !to_remove.is_empty() {
+            let mut p = pool.lock().unwrap();
+            for peer_id in to_remove {
+                if let Some(c) = p.get(&peer_id) {
+                    if conns.iter().any(|conn| conn.peer_id == peer_id && conn.id == c.id) {
+                        p.remove(&peer_id);
                     }
                 }
             }

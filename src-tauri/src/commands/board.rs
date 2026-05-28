@@ -8,7 +8,7 @@ use crate::config::load_config;
 
 #[command]
 pub fn get_tasks(db: tauri::State<DbPool>) -> Result<Vec<Task>, String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     let mut stmt = conn.prepare(
         "SELECT id, title, project, deadline, contact, priority, description, status, creator_id, assignee_id, is_team_visible, attached_files, archived_to_folder_id, created_at, updated_at FROM tasks ORDER BY updated_at DESC"
     ).map_err(|e| e.to_string())?;
@@ -40,7 +40,7 @@ pub fn get_tasks(db: tauri::State<DbPool>) -> Result<Vec<Task>, String> {
 pub fn save_task(task: Task, db: tauri::State<DbPool>, app_handle: tauri::AppHandle) -> Result<(), String> {
     let config = load_config();
     let now = chrono::Utc::now().timestamp();
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     
     // 保留原有 created_at，只在新建时设置
     let created_at = conn.query_row(
@@ -105,7 +105,7 @@ fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> Result<(), Box<
 
 #[command]
 pub fn delete_task(id: String, db: tauri::State<DbPool>, app_handle: tauri::AppHandle) -> Result<(), String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM tasks WHERE id = ?1", [id])
         .map_err(|e| e.to_string())?;
     drop(conn);
@@ -126,7 +126,7 @@ pub fn delete_task(id: String, db: tauri::State<DbPool>, app_handle: tauri::AppH
 
 #[command]
 pub fn update_task_status(id: String, status: String, db: tauri::State<DbPool>, app_handle: tauri::AppHandle) -> Result<(), String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now().timestamp();
     conn.execute(
         "UPDATE tasks SET status = ?1, updated_at = ?2 WHERE id = ?3",
@@ -157,7 +157,7 @@ pub fn archive_task(
 ) -> Result<(), String> {
     // 先查询 task 和 folder_path，然后立即释放锁（避免文件IO期间阻塞所有DB操作）
     let (task, folder_path) = {
-        let conn = db.lock().map_err(|e| e.to_string())?;
+        let conn = db.get().map_err(|e| e.to_string())?;
         let task: Task = conn.query_row(
             "SELECT id, title, project, deadline, contact, priority, description, status, creator_id, assignee_id, is_team_visible, attached_files, archived_to_folder_id, created_at, updated_at FROM tasks WHERE id = ?1",
             [&task_id],
@@ -222,7 +222,7 @@ pub fn archive_task(
     
     // Update task archived_to_folder_id
     let now = chrono::Utc::now().timestamp();
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     conn.execute(
         "UPDATE tasks SET archived_to_folder_id = ?1, updated_at = ?2 WHERE id = ?3",
         [&folder_id, &now.to_string(), &task_id],

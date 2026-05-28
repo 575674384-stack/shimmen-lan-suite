@@ -5,7 +5,7 @@ use crate::models::AiConfig;
 
 #[command]
 pub fn get_ai_config(db: tauri::State<DbPool>) -> Result<AiConfig, String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     let mut stmt = conn.prepare(
         "SELECT api_key, base_url, model, updated_at FROM ai_config WHERE id = 1"
     ).map_err(|e| e.to_string())?;
@@ -39,7 +39,7 @@ pub fn set_ai_config(
     db: tauri::State<DbPool>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now().timestamp();
     
     conn.execute(

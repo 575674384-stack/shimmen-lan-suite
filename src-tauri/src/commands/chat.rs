@@ -31,11 +31,11 @@ pub fn send_chat_message(
     
     // 保存到数据库（加详细日志以便排查）
     {
-        let conn = match db.lock() {
+        let conn = match db.get() {
             Ok(c) => c,
             Err(e) => {
-                error!("db.lock() failed: {}", e);
-                return Err(format!("数据库锁获取失败: {}", e));
+                error!("db.get() failed: {}", e);
+                return Err(format!("数据库连接获取失败: {}", e));
             }
         };
         if let Err(e) = conn.execute(
@@ -76,7 +76,7 @@ pub fn clear_chat_screen(app_handle: tauri::AppHandle, db: tauri::State<DbPool>)
     
     // 清空数据库（锁 poison 时直接报错）
     {
-        let conn = db.lock().map_err(|e| e.to_string())?;
+        let conn = db.get().map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM chat_messages", [])
             .map_err(|e| format!("清空聊天记录失败: {}", e))?;
     }
@@ -126,7 +126,7 @@ pub fn send_chat_file(
     
     // 保存到数据库（锁 poison 时直接报错）
     {
-        let conn = db.lock().map_err(|e| e.to_string())?;
+        let conn = db.get().map_err(|e| e.to_string())?;
         conn.execute(
             "INSERT INTO chat_messages (id, sender_id, sender_name, message_type, content, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             [&id, &config.device_id, &config.username, "file", &file_name, &timestamp.to_string()],
@@ -153,7 +153,7 @@ pub fn send_chat_file(
 
 #[command]
 pub fn get_chat_history(db: tauri::State<DbPool>) -> Result<Vec<serde_json::Value>, String> {
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get().map_err(|e| e.to_string())?;
     let mut stmt = conn.prepare(
         "SELECT id, sender_id, sender_name, message_type, content, timestamp FROM chat_messages ORDER BY timestamp ASC LIMIT 200"
     ).map_err(|e| e.to_string())?;
