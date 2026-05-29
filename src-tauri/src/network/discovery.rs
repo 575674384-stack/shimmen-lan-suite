@@ -24,18 +24,24 @@ pub fn start_discovery(config: AppConfig, peers: PeerMap, app_handle: tauri::App
     // 发送线程：广播发现包
     let send_socket = socket.clone();
     thread::spawn(move || {
-        let broadcast_addr = format!("255.255.255.255:{}", DISCOVERY_PORT);
-        loop {
-            let packet = DiscoveryPacket {
-                id: my_id.clone(),
-                username: my_username.clone(),
-                ip: local_ip_send.clone(),
-                version: my_version.clone(),
-                timestamp: chrono::Utc::now().timestamp(),
-            };
-            let json = serde_json::to_string(&packet).unwrap();
-            let _ = send_socket.send_to(json.as_bytes(), &broadcast_addr);
-            thread::sleep(Duration::from_secs(DISCOVERY_INTERVAL_SECS));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let broadcast_addr = format!("255.255.255.255:{}", DISCOVERY_PORT);
+            loop {
+                let packet = DiscoveryPacket {
+                    id: my_id.clone(),
+                    username: my_username.clone(),
+                    ip: local_ip_send.clone(),
+                    version: my_version.clone(),
+                    timestamp: chrono::Utc::now().timestamp(),
+                };
+                if let Ok(json) = serde_json::to_string(&packet) {
+                    let _ = send_socket.send_to(json.as_bytes(), &broadcast_addr);
+                }
+                thread::sleep(Duration::from_secs(DISCOVERY_INTERVAL_SECS));
+            }
+        }));
+        if let Err(e) = result {
+            eprintln!("[discovery] send thread panicked: {:?}", e);
         }
     });
     
@@ -47,59 +53,70 @@ pub fn start_discovery(config: AppConfig, peers: PeerMap, app_handle: tauri::App
     let recv_version = crate::config::APP_VERSION.to_string();
     let app_handle_for_recv = app_handle.clone();
     thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match recv_socket.recv_from(&mut buf) {
-                Ok((len, addr)) => {
-                    let msg = String::from_utf8_lossy(&buf[..len]);
-                    if let Ok(packet) = serde_json::from_str::<DiscoveryPacket>(&msg) {
-                        if packet.id != recv_id {
-                            if packet.version != recv_version {
-                                let _ = app_handle_for_recv.emit("version-mismatch", serde_json::json!({
-                                    "peer_name": packet.username,
-                                    "peer_ip": packet.ip,
-                                    "peer_version": packet.version,
-                                    "my_version": recv_version,
-                                }));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut buf = [0u8; 4096];
+            loop {
+                match recv_socket.recv_from(&mut buf) {
+                    Ok((len, addr)) => {
+                        let msg = String::from_utf8_lossy(&buf[..len]);
+                        if let Ok(packet) = serde_json::from_str::<DiscoveryPacket>(&msg) {
+                            if packet.id != recv_id {
+                                if packet.version != recv_version {
+                                    let _ = app_handle_for_recv.emit("version-mismatch", serde_json::json!({
+                                        "peer_name": packet.username,
+                                        "peer_ip": packet.ip,
+                                        "peer_version": packet.version,
+                                        "my_version": recv_version,
+                                    }));
+                                }
+                                let user = User {
+                                    id: packet.id,
+                                    username: packet.username,
+                                    ip: addr.ip().to_string(),
+                                    status: UserStatus::Online,
+                                    version: packet.version,
+                                };
+                                update_peer(&recv_peers, user);
+                                // 回复发现响应
+                                let response = DiscoveryPacket {
+                                    id: recv_id.clone(),
+                                    username: recv_username.clone(),
+                                    ip: local_ip_recv.clone(),
+                                    version: recv_version.clone(),
+                                    timestamp: chrono::Utc::now().timestamp(),
+                                };
+                                if let Ok(json) = serde_json::to_string(&response) {
+                                    let _ = recv_socket.send_to(json.as_bytes(), addr);
+                                }
                             }
-                            let user = User {
-                                id: packet.id,
-                                username: packet.username,
-                                ip: addr.ip().to_string(),
-                                status: UserStatus::Online,
-                                version: packet.version,
-                            };
-                            update_peer(&recv_peers, user);
-                            // 回复发现响应
-                            let response = DiscoveryPacket {
-                                id: recv_id.clone(),
-                                username: recv_username.clone(),
-                                ip: local_ip_recv.clone(),
-                                version: recv_version.clone(),
-                                timestamp: chrono::Utc::now().timestamp(),
-                            };
-                            let json = serde_json::to_string(&response).unwrap();
-                            let _ = recv_socket.send_to(json.as_bytes(), addr);
+                        }
+                    }
+                    Err(e) => {
+                        let err_kind = e.raw_os_error();
+                        // 致命错误（非 WouldBlock/TimedOut）时 sleep 避免 busy-loop
+                        if err_kind != Some(10035) && err_kind != Some(10060) {
+                            std::thread::sleep(std::time::Duration::from_millis(100));
                         }
                     }
                 }
-                Err(e) => {
-                    let err_kind = e.raw_os_error();
-                    // 致命错误（非 WouldBlock/TimedOut）时 sleep 避免 busy-loop
-                    if err_kind != Some(10035) && err_kind != Some(10060) {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                    }
-                }
             }
+        }));
+        if let Err(e) = result {
+            eprintln!("[discovery] recv thread panicked: {:?}", e);
         }
     });
     
     // 清理线程：移除超时节点
     let clean_peers = peers.clone();
     thread::spawn(move || {
-        loop {
-            thread::sleep(Duration::from_secs(PEER_TIMEOUT_SECS));
-            crate::network::peer::remove_stale_peers(&clean_peers);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            loop {
+                thread::sleep(Duration::from_secs(PEER_TIMEOUT_SECS));
+                crate::network::peer::remove_stale_peers(&clean_peers);
+            }
+        }));
+        if let Err(e) = result {
+            eprintln!("[discovery] cleanup thread panicked: {:?}", e);
         }
     });
     

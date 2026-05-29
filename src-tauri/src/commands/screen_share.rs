@@ -20,7 +20,8 @@ pub fn start_screen_share(
     fps: Option<u64>,
     resolution: Option<u64>,
 ) -> Result<(), String> {
-    if SHARING.load(Ordering::Relaxed) {
+    // CAS 防止并发启动导致多个截屏线程
+    if SHARING.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed).is_err() {
         return Err("已经在演示中".to_string());
     }
     
@@ -29,7 +30,6 @@ pub fn start_screen_share(
     let target_res = resolution.unwrap_or(cfg.screen_resolution);
     TARGET_FPS.store(target_fps, Ordering::Relaxed);
     TARGET_RES.store(target_res, Ordering::Relaxed);
-    SHARING.store(true, Ordering::Relaxed);
     
     thread::spawn(move || {
         // 确保无论正常退出还是 panic，SHARING 状态都被重置
@@ -85,16 +85,24 @@ fn capture_and_broadcast(app_handle: &tauri::AppHandle, monitor: &xcap::Monitor,
     // JPEG 编码器不支持 RGBA8，必须先转为 RGB8
     let rgb_image = scaled.to_rgb8();
     
-    // 高分辨率用较高质量，低分辨率用较低质量
-    let quality = if target_w >= 1280 { 40 } else { 30 };
+    // 高分辨率用较高质量，低分辨率用较低质量；若帧过大则自动降级
+    let mut quality = if target_w >= 1280 { 30 } else { 20 };
     let mut buf = Vec::new();
-    let encoder = JpegEncoder::new_with_quality(&mut buf, quality);
-    encoder.write_image(
-        rgb_image.as_raw(),
-        rgb_image.width(),
-        rgb_image.height(),
-        image::ExtendedColorType::Rgb8,
-    )?;
+    loop {
+        buf.clear();
+        let encoder = JpegEncoder::new_with_quality(&mut buf, quality);
+        encoder.write_image(
+            rgb_image.as_raw(),
+            rgb_image.width(),
+            rgb_image.height(),
+            image::ExtendedColorType::Rgb8,
+        )?;
+        // 限制单帧 base64 不超过 1MB，避免 IPC 阻塞
+        if buf.len() <= 768 * 1024 || quality <= 10 {
+            break;
+        }
+        quality -= 5;
+    }
     
     let base64 = base64::engine::general_purpose::STANDARD.encode(&buf);
     let frame = format!("data:image/jpeg;base64,{}", base64);

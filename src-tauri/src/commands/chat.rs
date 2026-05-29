@@ -105,6 +105,13 @@ pub fn send_chat_file(
         .unwrap_or("unknown")
         .to_string();
     
+    // 检查文件大小
+    let metadata = std::fs::metadata(&file_path)
+        .map_err(|e| format!("无法读取文件信息: {}", e))?;
+    if metadata.len() > 100 * 1024 * 1024 {
+        return Err("文件超过 100MB，请使用文件共享功能传输".to_string());
+    }
+    
     // 保存到本地下载目录（直接复制，避免大文件载入内存）
     let download_dir = crate::config::get_effective_download_dir(&app_handle);
     let local_path = download_dir.join(&file_name);

@@ -77,6 +77,7 @@ pub fn download_and_install(download_url: String, app_handle: AppHandle) -> Resu
     }
 
     std::thread::spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let tmp_dir = std::env::temp_dir();
         let installer_path = tmp_dir.join("shimmen-lan-suite-update.exe");
         let bat_path = tmp_dir.join("shimmen-update.bat");
@@ -130,6 +131,10 @@ pub fn download_and_install(download_url: String, app_handle: AppHandle) -> Resu
         let _ = app_handle.emit("update-ready", ());
         std::thread::sleep(std::time::Duration::from_millis(500));
         app_handle.exit(0);
+        }));
+        if let Err(_) = result {
+            let _ = app_handle.emit("update-error", "更新下载线程异常崩溃".to_string());
+        }
     });
 
     Ok("已开始下载更新".to_string())

@@ -74,19 +74,24 @@ impl SyncEngine {
             }
             let pool = self.pool.clone();
             std::thread::spawn(move || {
-                let duration = std::time::Duration::from_secs(interval);
-                while running.load(Ordering::Relaxed) {
-                    std::thread::sleep(duration);
-                    if !running.load(Ordering::Relaxed) {
-                        break;
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let duration = std::time::Duration::from_secs(interval);
+                    while running.load(Ordering::Relaxed) {
+                        std::thread::sleep(duration);
+                        if !running.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        if let Ok(files) = indexer::index_folder(&fpath) {
+                            let msg = NetworkMessage::FileList {
+                                folder_id: fid.clone(),
+                                files,
+                            };
+                            let _ = broadcast_message(&pool, &msg);
+                        }
                     }
-                    if let Ok(files) = indexer::index_folder(&fpath) {
-                        let msg = NetworkMessage::FileList {
-                            folder_id: fid.clone(),
-                            files,
-                        };
-                        let _ = broadcast_message(&pool, &msg);
-                    }
+                }));
+                if let Err(e) = result {
+                    eprintln!("[file_sync] polling thread panicked: {:?}", e);
                 }
             });
         }

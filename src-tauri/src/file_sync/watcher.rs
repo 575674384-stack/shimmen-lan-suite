@@ -23,23 +23,28 @@ impl FolderWatcher {
         watcher.watch(Path::new(&folder_path), RecursiveMode::Recursive)?;
 
         std::thread::spawn(move || {
-            loop {
-                match rx.recv() {
-                    Ok(Ok(_event)) => {
-                        // 防抖：收到事件后等待 500ms，合并连续事件
-                        std::thread::sleep(Duration::from_millis(500));
-                        while rx.try_recv().is_ok() {}
-                        on_change();
-                    }
-                    Ok(Err(_)) => {
-                        // watcher 内部错误，短暂休眠后继续
-                        std::thread::sleep(Duration::from_millis(1000));
-                    }
-                    Err(_) => {
-                        // RecvError: watcher 已被释放，退出循环，避免 100% CPU
-                        break;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                loop {
+                    match rx.recv() {
+                        Ok(Ok(_event)) => {
+                            // 防抖：收到事件后等待 500ms，合并连续事件
+                            std::thread::sleep(Duration::from_millis(500));
+                            while rx.try_recv().is_ok() {}
+                            on_change();
+                        }
+                        Ok(Err(_)) => {
+                            // watcher 内部错误，短暂休眠后继续
+                            std::thread::sleep(Duration::from_millis(1000));
+                        }
+                        Err(_) => {
+                            // RecvError: watcher 已被释放，退出循环，避免 100% CPU
+                            break;
+                        }
                     }
                 }
+            }));
+            if let Err(e) = result {
+                eprintln!("[file_sync] watcher thread panicked: {:?}", e);
             }
         });
 

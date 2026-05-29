@@ -309,7 +309,7 @@ pub fn install_powershell7() -> Result<String, String> {
     // Install silently
     let output = std::process::Command::new("msiexec")
         .args([
-            "/i", installer.to_str().unwrap(),
+            "/i", &installer.to_string_lossy(),
             "/qn", "/norestart",
         ])
         .output()
@@ -911,20 +911,23 @@ pub fn install_software(download_url: String, installer_args: String) -> Result<
     let mut file = std::fs::File::create(&installer_path)
         .map_err(|e| format!("创建文件失败: {}", e))?;
     let mut reader = resp.into_reader();
-    std::io::copy(&mut reader, &mut file)
+    let bytes = std::io::copy(&mut reader, &mut file)
         .map_err(|e| format!("写入失败: {}", e))?;
+    if bytes > 500 * 1024 * 1024 {
+        return Err("下载文件超过 500MB，拒绝安装".to_string());
+    }
 
     // Run installer
     let ext = installer_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
     let status = if ext == "msi" {
         std::process::Command::new("msiexec")
-            .args(["/i", installer_path.to_str().unwrap(), &installer_args])
+            .args(["/i", &installer_path.to_string_lossy(), &installer_args])
             .spawn()
             .map_err(|e| format!("启动安装失败: {}", e))?
     } else {
         let mut cmd = std::process::Command::new(&installer_path);
-        if !installer_args.is_empty() {
-            cmd.arg(&installer_args);
+        for arg in installer_args.split_whitespace() {
+            cmd.arg(arg);
         }
         cmd.spawn().map_err(|e| format!("启动安装失败: {}", e))?
     };

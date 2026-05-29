@@ -79,12 +79,14 @@ fn main() {
             let app_handle = app.app_handle().clone();
             let app_handle_for_reconnect = app_handle.clone();
             std::thread::spawn(move || {
-                let _ = network::server::start_server(
+                if let Err(e) = network::server::start_server(
                     config::CONTROL_PORT,
                     peers_for_server,
                     pool_for_server,
                     app_handle,
-                );
+                ) {
+                    eprintln!("[main] start_server failed: {}", e);
+                }
             });
             
             // start discovery AFTER TCP server is bound
@@ -93,7 +95,9 @@ fn main() {
             let app_handle_for_discovery = app.app_handle().clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(1));
-                let _ = network::discovery::start_discovery(config_for_discovery, peers_for_discovery, app_handle_for_discovery);
+                if let Err(e) = network::discovery::start_discovery(config_for_discovery, peers_for_discovery, app_handle_for_discovery) {
+                    eprintln!("[main] start_discovery failed: {}", e);
+                }
             });
             
             // create and manage sync engine
@@ -108,23 +112,28 @@ fn main() {
             let db_for_monitor = db_pool.clone();
             let engine_for_monitor = sync_engine.clone();
             std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                if let Ok(conn) = db_for_monitor.get() {
-                    let mut stmt = match conn.prepare(
-                        "SELECT id, local_path FROM shared_folders WHERE sync_status = 'syncing'"
-                    ) {
-                        Ok(s) => s,
-                        Err(_) => return,
-                    };
-                    let rows = stmt.query_map([], |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                    });
-                    if let Ok(rows) = rows {
-                        for row in rows.flatten() {
-                            let (folder_id, local_path) = row;
-                            let _ = engine_for_monitor.start_monitoring(folder_id, local_path);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    if let Ok(conn) = db_for_monitor.get() {
+                        let mut stmt = match conn.prepare(
+                            "SELECT id, local_path FROM shared_folders WHERE sync_status = 'syncing'"
+                        ) {
+                            Ok(s) => s,
+                            Err(_) => return,
+                        };
+                        let rows = stmt.query_map([], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                        });
+                        if let Ok(rows) = rows {
+                            for row in rows.flatten() {
+                                let (folder_id, local_path) = row;
+                                let _ = engine_for_monitor.start_monitoring(folder_id, local_path);
+                            }
                         }
                     }
+                }));
+                if let Err(e) = result {
+                    eprintln!("[main] folder monitor init thread panicked: {:?}", e);
                 }
             });
             
@@ -132,37 +141,42 @@ fn main() {
             let db_for_broadcast = db_pool.clone();
             let pool_for_broadcast = pool.clone();
             std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                if let Ok(conn) = db_for_broadcast.get() {
-                    if let Ok(mut stmt) = conn.prepare("SELECT id, owner_id, owner_name, local_path, name, sync_status FROM shared_folders") {
-                        if let Ok(rows) = stmt.query_map([], |row| {
-                            Ok(models::SharedFolder {
-                                id: row.get(0)?,
-                                owner_id: row.get(1)?,
-                                owner_name: row.get(2)?,
-                                local_path: row.get(3)?,
-                                name: row.get(4)?,
-                                sync_status: match row.get::<_, String>(5)?.as_str() {
-                                    "syncing" => models::SyncStatus::Syncing,
-                                    "paused" => models::SyncStatus::Paused,
-                                    "error" => models::SyncStatus::Error,
-                                    _ => models::SyncStatus::Paused,
-                                },
-                            })
-                        }) {
-                            let folders: Vec<_> = rows.flatten().collect();
-                            if !folders.is_empty() {
-                                if let Ok(data) = serde_json::to_value(&folders) {
-                                    let msg = models::NetworkMessage::StateSync {
-                                        table: "shared_folders".to_string(),
-                                        data,
-                                        version: serde_json::json!({}),
-                                    };
-                                    network::client::broadcast_message(&pool_for_broadcast, &msg);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    if let Ok(conn) = db_for_broadcast.get() {
+                        if let Ok(mut stmt) = conn.prepare("SELECT id, owner_id, owner_name, local_path, name, sync_status FROM shared_folders") {
+                            if let Ok(rows) = stmt.query_map([], |row| {
+                                Ok(models::SharedFolder {
+                                    id: row.get(0)?,
+                                    owner_id: row.get(1)?,
+                                    owner_name: row.get(2)?,
+                                    local_path: row.get(3)?,
+                                    name: row.get(4)?,
+                                    sync_status: match row.get::<_, String>(5)?.as_str() {
+                                        "syncing" => models::SyncStatus::Syncing,
+                                        "paused" => models::SyncStatus::Paused,
+                                        "error" => models::SyncStatus::Error,
+                                        _ => models::SyncStatus::Paused,
+                                    },
+                                })
+                            }) {
+                                let folders: Vec<_> = rows.flatten().collect();
+                                if !folders.is_empty() {
+                                    if let Ok(data) = serde_json::to_value(&folders) {
+                                        let msg = models::NetworkMessage::StateSync {
+                                            table: "shared_folders".to_string(),
+                                            data,
+                                            version: serde_json::json!({}),
+                                        };
+                                        network::client::broadcast_message(&pool_for_broadcast, &msg);
+                                    }
                                 }
                             }
                         }
                     }
+                }));
+                if let Err(e) = result {
+                    eprintln!("[main] folder broadcast thread panicked: {:?}", e);
                 }
             });
             
@@ -172,16 +186,21 @@ fn main() {
             let my_id_for_index = my_id.clone();
             let config_for_index = config.clone();
             std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                let default_paths = vec![
-                    dirs::desktop_dir().map(|p| p.to_string_lossy().to_string()),
-                    dirs::document_dir().map(|p| p.to_string_lossy().to_string()),
-                    dirs::download_dir().map(|p| p.to_string_lossy().to_string()),
-                ].into_iter().flatten().collect::<Vec<_>>();
-                
-                if let Ok(count) = file_index::indexer::scan_directories(default_paths, &my_id_for_index, &config_for_index.username, &db_for_index) {
-                    println!("文件索引完成: {} 个文件", count);
-                    file_index::network::broadcast_index(&db_for_index, &pool_for_index, &my_id_for_index, &config_for_index.username);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let default_paths = vec![
+                        dirs::desktop_dir().map(|p| p.to_string_lossy().to_string()),
+                        dirs::document_dir().map(|p| p.to_string_lossy().to_string()),
+                        dirs::download_dir().map(|p| p.to_string_lossy().to_string()),
+                    ].into_iter().flatten().collect::<Vec<_>>();
+                    
+                    if let Ok(count) = file_index::indexer::scan_directories(default_paths, &my_id_for_index, &config_for_index.username, &db_for_index) {
+                        println!("文件索引完成: {} 个文件", count);
+                        file_index::network::broadcast_index(&db_for_index, &pool_for_index, &my_id_for_index, &config_for_index.username);
+                    }
+                }));
+                if let Err(e) = result {
+                    eprintln!("[main] file index thread panicked: {:?}", e);
                 }
             });
 
@@ -190,13 +209,14 @@ fn main() {
             let peers_for_connect = peers.clone();
             let my_id_for_connect = my_id.clone();
             std::thread::spawn(move || {
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                    network::leader::ensure_leader(&peers_for_connect, &my_id_for_connect);
-                    let leader_id = network::leader::get_leader_id();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(3));
+                        network::leader::ensure_leader(&peers_for_connect, &my_id_for_connect);
+                        let leader_id = network::leader::get_leader_id();
                     
                     let pool_ids: std::collections::HashSet<String> = {
-                        let p = pool_for_connect.lock().unwrap();
+                        let p = pool_for_connect.lock().unwrap_or_else(|e| e.into_inner());
                         p.keys().cloned().collect()
                     };
                     
@@ -207,7 +227,7 @@ fn main() {
                             .cloned()
                             .collect();
                         if !to_remove.is_empty() {
-                            let mut p = pool_for_connect.lock().unwrap();
+                            let mut p = pool_for_connect.lock().unwrap_or_else(|e| e.into_inner());
                             for id in to_remove {
                                 p.remove(&id);
                             }
@@ -223,7 +243,7 @@ fn main() {
                     if let Some(ref lid) = leader_id {
                         if !pool_ids.contains(lid) {
                             let leader_ip = {
-                                let peers_map = peers_for_connect.lock().unwrap();
+                                let peers_map = peers_for_connect.lock().unwrap_or_else(|e| e.into_inner());
                                 peers_map.get(lid).map(|p| p.user.ip.clone())
                             };
                             if let Some(ip) = leader_ip {
@@ -239,6 +259,10 @@ fn main() {
                         }
                     }
                 }
+            }));
+            if let Err(e) = result {
+                eprintln!("[main] reconnect thread panicked: {:?}", e);
+            }
             });
             
             Ok(())

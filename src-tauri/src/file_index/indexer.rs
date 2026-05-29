@@ -42,11 +42,16 @@ pub fn scan_directories(paths: Vec<String>, peer_id: &str, peer_name: &str, db: 
             continue;
         }
 
+        const MAX_FILES: usize = 100_000;
         for entry in walkdir::WalkDir::new(base_path)
             .max_depth(5)
             .into_iter()
             .filter_map(|e| e.ok())
         {
+            if count >= MAX_FILES {
+                eprintln!("[file_index] reached max file limit ({}), stopping scan", MAX_FILES);
+                break;
+            }
             if !entry.file_type().is_file() {
                 continue;
             }

@@ -81,7 +81,7 @@ pub fn connect_to_peer(
     if my_id > peer_id {
         std::thread::sleep(std::time::Duration::from_secs(2));
         let already_connected = {
-            let p = pool.lock().unwrap();
+            let p = pool.lock().unwrap_or_else(|e| e.into_inner());
             p.contains_key(&peer_id)
         };
         if already_connected {
@@ -91,70 +91,75 @@ pub fn connect_to_peer(
     }
 
     thread::spawn(move || {
-        let addr = format!("{}:{}", peer_ip, port);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let addr = format!("{}:{}", peer_ip, port);
 
-        let stream = match std::net::TcpStream::connect(&addr) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("[network] connect_to_peer {} failed: {}", addr, e);
+            let stream = match std::net::TcpStream::connect(&addr) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[network] connect_to_peer {} failed: {}", addr, e);
+                    return;
+                }
+            };
+
+            stream.set_nonblocking(false).ok();
+            let conn = Connection::new(peer_id.clone(), stream);
+
+            let handshake = serde_json::json!({"peer_id": my_id});
+            if conn.send_message(&handshake).is_err() {
+                eprintln!("[network] handshake to {} failed", peer_id);
                 return;
             }
-        };
 
-        stream.set_nonblocking(false).ok();
-        let conn = Connection::new(peer_id.clone(), stream);
-
-        let handshake = serde_json::json!({"peer_id": my_id});
-        if conn.send_message(&handshake).is_err() {
-            eprintln!("[network] handshake to {} failed", peer_id);
-            return;
-        }
-
-        {
-            let mut p = pool.lock().unwrap();
-            p.remove(&peer_id);
-            p.insert(peer_id.clone(), conn.clone());
-        }
-
-        // Read loop: handle messages sent back on this outbound connection
-        loop {
-            match conn.read_message() {
-                Ok(data) => {
-                    crate::network::server::process_message(
-                        &peer_id,
-                        &data,
-                        &app_handle,
-                        &pool,
-                    );
-                }
-                Err(e) => {
-                    eprintln!("[network] outbound read error from {}: {}", peer_id, e);
-                    if crate::network::leader::get_leader_id().as_ref() == Some(&peer_id) {
-                        crate::network::leader::set_leader_id(None);
-                        eprintln!("[network] leader {} disconnected, will re-elect", peer_id);
-                    }
-                    break;
-                }
-            }
-        }
-
-        let mut p = pool.lock().unwrap();
-        if let Some(c) = p.get(&peer_id) {
-            if c.id == conn.id {
+            {
+                let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
                 p.remove(&peer_id);
+                p.insert(peer_id.clone(), conn.clone());
             }
+
+            // Read loop: handle messages sent back on this outbound connection
+            loop {
+                match conn.read_message() {
+                    Ok(data) => {
+                        crate::network::server::process_message(
+                            &peer_id,
+                            &data,
+                            &app_handle,
+                            &pool,
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("[network] outbound read error from {}: {}", peer_id, e);
+                        if crate::network::leader::get_leader_id().as_ref() == Some(&peer_id) {
+                            crate::network::leader::set_leader_id(None);
+                            eprintln!("[network] leader {} disconnected, will re-elect", peer_id);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(c) = p.get(&peer_id) {
+                if c.id == conn.id {
+                    p.remove(&peer_id);
+                }
+            }
+            // 清理该 peer 未完成的文件分块接收，避免句柄泄漏
+            crate::network::server::cleanup_peer_chunks(&peer_id);
+        }));
+        if let Err(e) = result {
+            eprintln!("[network] outbound connection thread panicked: {:?}", e);
         }
-        // 清理该 peer 未完成的文件分块接收，避免句柄泄漏
-        crate::network::server::cleanup_peer_chunks(&peer_id);
     });
 }
 
 pub fn broadcast_message<T: serde::Serialize>(pool: &ConnectionPool, msg: &T) {
-    let my_id = crate::config::load_config().device_id;
+    let my_id = crate::config::cached_device_id();
     if crate::network::leader::is_leader(&my_id) {
         // Leader: 广播给所有已连接 Peer
         let conns: Vec<Connection> = {
-            let p = pool.lock().unwrap();
+            let p = pool.lock().unwrap_or_else(|e| e.into_inner());
             p.values().cloned().collect()
         };
         let mut to_remove: Vec<String> = Vec::new();
@@ -165,7 +170,7 @@ pub fn broadcast_message<T: serde::Serialize>(pool: &ConnectionPool, msg: &T) {
             }
         }
         if !to_remove.is_empty() {
-            let mut p = pool.lock().unwrap();
+            let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
             for peer_id in to_remove {
                 if let Some(c) = p.get(&peer_id) {
                     if conns.iter().any(|conn| conn.peer_id == peer_id && conn.id == c.id) {
@@ -191,11 +196,11 @@ pub fn send_to_peer<T: serde::Serialize>(
     peer_id: &str,
     msg: &T,
 ) -> std::io::Result<()> {
-    let my_id = crate::config::load_config().device_id;
+    let my_id = crate::config::cached_device_id();
     if crate::network::leader::is_leader(&my_id) {
         // Leader: 直接发给目标 Peer
         let conn = {
-            let p = pool.lock().unwrap();
+            let p = pool.lock().unwrap_or_else(|e| e.into_inner());
             p.get(peer_id).cloned()
         };
         if let Some(conn) = conn {
@@ -212,7 +217,7 @@ pub fn send_to_peer<T: serde::Serialize>(
             if leader_id == peer_id {
                 // 目标就是 Leader，直接发
                 let conn = {
-                    let p = pool.lock().unwrap();
+                    let p = pool.lock().unwrap_or_else(|e| e.into_inner());
                     p.get(peer_id).cloned()
                 };
                 if let Some(conn) = conn {
@@ -228,7 +233,7 @@ pub fn send_to_peer<T: serde::Serialize>(
                 // 先检查 Leader 是否已连接，避免静默丢消息
                 let leader_connected = crate::network::leader::get_leader_id()
                     .map(|lid| {
-                        let p = pool.lock().unwrap();
+                        let p = pool.lock().unwrap_or_else(|e| e.into_inner());
                         p.contains_key(&lid)
                     })
                     .unwrap_or(false);

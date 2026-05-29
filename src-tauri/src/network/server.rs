@@ -61,48 +61,58 @@ pub fn start_server(
     // Leader 心跳线程：每 2 秒给所有已连接 Peer 发送 Heartbeat
     let pool_for_heartbeat = pool.clone();
     thread::spawn(move || {
-        loop {
-            thread::sleep(std::time::Duration::from_secs(2));
-            let my_id = crate::config::load_config().device_id;
-            if crate::network::leader::is_leader(&my_id) {
-                let heartbeat = NetworkMessage::Heartbeat;
-                let conns: Vec<Connection> = {
-                    let p = pool_for_heartbeat.lock().unwrap();
-                    p.values().cloned().collect()
-                };
-                for conn in conns {
-                    let _ = conn.send_message(&heartbeat);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            loop {
+                thread::sleep(std::time::Duration::from_secs(2));
+                let my_id = crate::config::cached_device_id();
+                if crate::network::leader::is_leader(&my_id) {
+                    let heartbeat = NetworkMessage::Heartbeat;
+                    let conns: Vec<Connection> = {
+                        let p = pool_for_heartbeat.lock().unwrap_or_else(|e| e.into_inner());
+                        p.values().cloned().collect()
+                    };
+                    for conn in conns {
+                        let _ = conn.send_message(&heartbeat);
+                    }
                 }
             }
+        }));
+        if let Err(e) = result {
+            eprintln!("[network] heartbeat thread panicked: {:?}", e);
         }
     });
 
     thread::spawn(move || {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let current = active_count.fetch_add(1, Ordering::Relaxed);
-                    if current >= MAX_CONNECTIONS {
-                        active_count.fetch_sub(1, Ordering::Relaxed);
-                        eprintln!("[network] connection limit reached ({}), dropping new connection", MAX_CONNECTIONS);
-                        continue;
-                    }
-                    let pool = pool.clone();
-                    let app_handle = app_handle.clone();
-                    let active_count = active_count.clone();
-                    thread::spawn(move || {
-                        // 确保无论 handle_incoming 是否正常返回或 panic，计数器都正确递减
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            handle_incoming(stream, pool, app_handle);
-                        }));
-                        active_count.fetch_sub(1, Ordering::Relaxed);
-                        if let Err(e) = result {
-                            eprintln!("[network] handle_incoming panicked: {:?}", e);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(stream) => {
+                        let current = active_count.fetch_add(1, Ordering::Relaxed);
+                        if current >= MAX_CONNECTIONS {
+                            active_count.fetch_sub(1, Ordering::Relaxed);
+                            eprintln!("[network] connection limit reached ({}), dropping new connection", MAX_CONNECTIONS);
+                            continue;
                         }
-                    });
+                        let pool = pool.clone();
+                        let app_handle = app_handle.clone();
+                        let active_count = active_count.clone();
+                        thread::spawn(move || {
+                            // 确保无论 handle_incoming 是否正常返回或 panic，计数器都正确递减
+                            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                handle_incoming(stream, pool, app_handle);
+                            }));
+                            active_count.fetch_sub(1, Ordering::Relaxed);
+                            if let Err(e) = result {
+                                eprintln!("[network] handle_incoming panicked: {:?}", e);
+                            }
+                        });
+                    }
+                    Err(_) => {}
                 }
-                Err(_) => {}
             }
+        }));
+        if let Err(e) = result {
+            eprintln!("[network] listener thread panicked: {:?}", e);
         }
     });
 
@@ -119,11 +129,15 @@ fn handle_incoming(stream: TcpStream, pool: ConnectionPool, app_handle: tauri::A
         Ok(data) => {
             if let Ok(msg) = serde_json::from_slice::<serde_json::Value>(&data) {
                 if let Some(peer_id) = msg.get("peer_id").and_then(|v| v.as_str()) {
+                    if peer_id.len() > 128 {
+                        eprintln!("[network] peer_id too long ({} bytes), rejecting connection from {:?}", peer_id.len(), peer_addr);
+                        return;
+                    }
                     let peer_id = peer_id.to_string();
                     conn.peer_id = peer_id.clone();
 
                     {
-                        let mut p = pool.lock().unwrap();
+                        let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
                         p.remove(&peer_id); // close any stale connection first
                         p.insert(peer_id.clone(), conn.clone());
                     }
@@ -140,7 +154,7 @@ fn handle_incoming(stream: TcpStream, pool: ConnectionPool, app_handle: tauri::A
                         }
                     }
 
-                    let mut p = pool.lock().unwrap();
+                    let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(c) = p.get(&peer_id) {
                         if c.id == conn.id {
                             p.remove(&peer_id);
@@ -175,7 +189,7 @@ pub(crate) fn process_message(
         }
     };
     // Leader 转发逻辑：将来自 Peer 的原始消息 Relay 给其他所有 Peer（Heartbeat 不转发）
-        let my_id = crate::config::load_config().device_id;
+        let my_id = crate::config::cached_device_id();
         // Leader 转发：排除 Heartbeat（维持连接）、FileIndexRequest/FileSearchRequest（Leader-only，无需转发）
         if crate::network::leader::is_leader(&my_id) && peer_id != my_id
             && !matches!(msg, NetworkMessage::Heartbeat)
@@ -192,14 +206,14 @@ pub(crate) fn process_message(
                 payload: Box::new(msg.clone()),
             };
             let conns: Vec<Connection> = {
-                let p = pool.lock().unwrap();
+                let p = pool.lock().unwrap_or_else(|e| e.into_inner());
                 p.values().cloned().collect()
             };
             for conn in conns {
                 if conn.peer_id != peer_id {
                     if let Err(e) = conn.send_message(&relay) {
                         eprintln!("[network] leader relay to {} failed: {}", conn.peer_id, e);
-                        let mut p = pool.lock().unwrap();
+                        let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(c) = p.get(&conn.peer_id) {
                             if c.id == conn.id {
                                 p.remove(&conn.peer_id);
@@ -230,11 +244,18 @@ pub(crate) fn process_message(
                 }.unwrap_or_else(|| trusted_sender_id.clone());
                 
                 if let Some(db) = app_handle.try_state::<crate::db::DbPool>() {
-                    if let Ok(conn) = db.get() {
-                        let _ = conn.execute(
-                            "INSERT OR REPLACE INTO chat_messages (id, sender_id, sender_name, content, message_type, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                            rusqlite::params![id, &trusted_sender_id, &trusted_sender_name, content, message_type, chrono::Utc::now().timestamp()],
-                        );
+                    match db.get() {
+                        Ok(conn) => {
+                            if let Err(e) = conn.execute(
+                                "INSERT OR REPLACE INTO chat_messages (id, sender_id, sender_name, content, message_type, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                rusqlite::params![id, &trusted_sender_id, &trusted_sender_name, content, message_type, chrono::Utc::now().timestamp()],
+                            ) {
+                                eprintln!("[server] failed to persist chat message to DB: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[server] DB pool exhausted, chat message not persisted: {}", e);
+                        }
                     }
                 }
                 let _ = app_handle.emit(
@@ -343,13 +364,28 @@ pub(crate) fn process_message(
                     eprintln!("[server] FileChunk path traversal blocked: {}", file_path);
                     return;
                 }
+                // 安全：验证 chunk 参数合理性
+                if *total_chunks == 0 || *total_chunks > 100_000 {
+                    eprintln!("[file_chunk] invalid total_chunks: {}", total_chunks);
+                    return;
+                }
+                if *chunk_index >= *total_chunks {
+                    eprintln!("[file_chunk] chunk_index {} out of range (total: {})", chunk_index, total_chunks);
+                    return;
+                }
                 let key = format!("{}:{}:{}", peer_id, folder_id, file_path);
-                let mut map = chunk_receives().lock().unwrap();
+                let mut map = chunk_receives().lock().unwrap_or_else(|e| e.into_inner());
                 // 如果收到 chunk 0 且已有同 key 状态，说明是新传输，重置旧状态
                 if *chunk_index == 0 && map.contains_key(&key) {
                     map.remove(&key);
                 }
                 if !map.contains_key(&key) {
+                    // 限制每个 peer 的并发文件传输数（防 DoS）
+                    let peer_chunk_count = map.keys().filter(|k| k.starts_with(&format!("{}:", peer_id))).count();
+                    if peer_chunk_count >= 5 {
+                        eprintln!("[file_chunk] peer {} has too many concurrent transfers, dropping chunk", peer_id);
+                        return;
+                    }
                     // 使用 .part 临时文件，避免多 peer 同时写同一目标文件导致损坏
                     let target_path = if folder_id.is_empty() {
                         crate::config::get_effective_download_dir(app_handle).join(file_path)
@@ -391,7 +427,13 @@ pub(crate) fn process_message(
                 }
                 // 将写入和完成检查放在闭包中，避免 state 借用与 map.remove 冲突
                 let maybe_complete: Option<std::path::PathBuf> = {
-                    let state = map.get_mut(&key).unwrap();
+                    let state = match map.get_mut(&key) {
+                        Some(s) => s,
+                        None => {
+                            eprintln!("[file_chunk] chunk state missing for key: {}", key);
+                            return;
+                        }
+                    };
                     match base64::engine::general_purpose::STANDARD.decode(data_base64) {
                         Ok(data) => {
                             let offset = (*chunk_index as u64) * (CHUNK_SIZE as u64);
@@ -476,7 +518,7 @@ pub(crate) fn process_message(
                 }));
             }
             NetworkMessage::FileIndexRequest { requester_id } => {
-                let my_id = crate::config::load_config().device_id;
+                let my_id = crate::config::cached_device_id();
                 // 星型拓扑：只有 Leader 有所有 Peer 的连接，非 Leader 无法直接响应
                 if !crate::network::leader::is_leader(&my_id) {
                     return;
@@ -488,7 +530,7 @@ pub(crate) fn process_message(
                         Err(_) => Vec::new(),
                     };
                     let msg = crate::models::NetworkMessage::FileIndexBroadcast {
-                        peer_id: my_id.clone(),
+                        peer_id: my_id.to_string(),
                         peer_name: my_name,
                         files,
                     };
@@ -496,7 +538,7 @@ pub(crate) fn process_message(
                 }
             }
             NetworkMessage::FileSearchRequest { requester_id, query } => {
-                let my_id = crate::config::load_config().device_id;
+                let my_id = crate::config::cached_device_id();
                 // 星型拓扑：只有 Leader 能直接响应请求者
                 if !crate::network::leader::is_leader(&my_id) {
                     return;
@@ -591,7 +633,7 @@ pub(crate) fn process_message(
             }
             NetworkMessage::Heartbeat => {
                 // 非 Leader 收到 Heartbeat 后回复，维持 Leader 端连接活跃
-                let my_id = crate::config::load_config().device_id;
+                let my_id = crate::config::cached_device_id();
                 if !crate::network::leader::is_leader(&my_id) {
                     if let Some(leader_id) = crate::network::leader::get_leader_id() {
                         if leader_id == peer_id {

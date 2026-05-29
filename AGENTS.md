@@ -8,7 +8,7 @@
 
 - **名称**：水门内网协同 (shimmen-lan-suite)
 - **类型**：Tauri v2 桌面应用（Windows）
-- **当前版本**：v0.1.5
+- **当前版本**：v0.1.14
 - **核心特性**：星型拓扑内网协同，自动 Leader 选举，零服务器，内网自发现
 - **GitHub**：`575674384-stack/shimmen-lan-suite`
 
@@ -283,10 +283,55 @@ npx tauri build
 - 前端 `network-message` 无差别 reload → `useTasks`/`AnnouncementBoard` 按 table 过滤
 - 聊天记录无限增长 → 限制保留最近 500 条
 
-### Round 6 — 日志系统 + 可观测性 + 用户可控更新（v0.1.5）
+### Round 6 — 日志系统 + 可观测性 + 用户可控更新（v0.1.5 → v0.1.11）
 - 运行时故障无日志 → 引入 `tracing` + `tracing-appender`，按天轮转写入 `%APPDATA%\shimmen-lan-suite\shimmen.log`
 - 聊天发送失败原因不明 → `chat.rs` 关键步骤加 `info!`/`error!`/`warn!` 日志，暴露 DB 锁/INSERT/广播各阶段状态
 - 自动更新不可关闭 → `AppConfig` 新增 `auto_update`（默认 true），设置面板增加开关，`UpdatePrompt.tsx` 启动检查前读取配置
+- `Arc<Mutex<Connection>>` → `r2d2` 连接池（max_size=5），`db.get()` 代替 `db.lock()`
+- `broadcast_message` 循环内反复获取锁 → 失败连接收集到 `to_remove` 后统一清理
+- `load_config()` 每次调用都写盘 → 仅在配置变化时保存
+- 更新下载校验文件大小 > 1MB
+- 启动时 `PRAGMA wal_checkpoint(TRUNCATE)`
+- Tauri v2 `invoke` 顶层参数 camelCase 全量修复
+
+### Round 7 — 锁安全 + IPC 压力 + 并发竞态修复（v0.1.12）
+- `chunk_receives().lock().unwrap()` 漏网之鱼 → 统一 `unwrap_or_else(|e| e.into_inner())`（server.rs FileChunk 分支）
+- `config.rs` `load_config()` 两次读取配置文件 → 重用已读取 cfg 比较
+- `process_message` ChatMessage 分支 `db.get()` 失败静默跳过 → 显式错误日志（连接池耗尽时用户可见）
+- `screen_share.rs` 大帧 IPC 压力（1-3MB/帧）→ quality 降级（1280p 30/其他 20）+ 自动再降级（单帧 ≤ 768KB）
+- `map.get_mut(&key).unwrap()` → `match` 安全访问（server.rs FileChunk）
+- `broadcast_message`/`send_to_peer` 每次调用 `load_config()` → `OnceLock` 缓存 `device_id`
+- `discovery.rs` `serde_json::to_string(...).unwrap()` → `if let Ok` 安全序列化
+- `update.rs` 下载线程 panic 无通知 → `catch_unwind` + emit `update-error`
+- `connection.rs` `stream.lock().unwrap()` → `unwrap_or_else(|e| e.into_inner())`
+- `screen_share.rs` `SHARING` load+store 非原子竞态 → `compare_exchange` CAS 防并发启动
+- `crypto.rs` 硬编码 SALT → 项目无此文件，无需修复
+
+### Round 8 — 全量锁毒化恢复 + 线程崩溃防护 + 边界加固（v0.1.13）
+- **16 处 `pool.lock().unwrap()` 锁毒化风险** → `unwrap_or_else(|e| e.into_inner())`
+  - `server.rs` 5 处（heartbeat、handle_incoming、process_message Leader 转发）
+  - `client.rs` 8 处（broadcast_message、send_to_peer、connect_to_peer）
+  - `main.rs` 3 处（重连线程的 ConnectionPool + PeerMap）
+- **`tools.rs` 2 处 `Path::to_str().unwrap()`** → `to_string_lossy()`，防止非法 Unicode 路径 panic
+- **`connection.rs` `MAX_MSG_LEN` 50MB → 10MB** → 降低反序列化炸弹风险
+- **`main.rs` `start_server`/`start_discovery` 返回值被忽略** → 绑定失败时打印错误日志
+- **`tools.rs` `install_software` `installer_args` 参数传递** → `split_whitespace()` 拆分，避免单字符串参数注入问题
+- **12 个 `thread::spawn` 添加 `catch_unwind`** → 任何后台线程 panic 不再导致功能永久停止
+  - `server.rs`: heartbeat 线程、listener 线程
+  - `client.rs`: outbound 连接 read loop
+  - `main.rs`: 恢复监控、广播共享文件夹、文件索引扫描、重连线程
+  - `discovery.rs`: 发送、接收、清理线程
+  - `file_sync/engine.rs`: 定时轮询线程
+  - `file_sync/watcher.rs`: 文件事件监听线程
+- **`server.rs` 5 处高频 `load_config()`** → `cached_device_id()`（`OnceLock` 缓存），消除每条网络消息都读盘的性能损耗
+
+### Round 9 — 网络边界加固 + DoS 防护 + 资源上限（v0.1.14）
+- **`server.rs` `handle_incoming` `peer_id` 长度未限制** → 限制 ≤ 128 字节，防超大 key 内存攻击
+- **`server.rs` `chunk_receives` 无并发限制** → 每个 peer 最多 5 个并发文件传输，防文件句柄/磁盘 DoS
+- **`server.rs` `FileChunk` `total_chunks` 未验证** → 限制 1..100,000，验证 `chunk_index < total_chunks`，防资源泄漏
+- **`tools.rs` `install_software` 无下载大小上限** → 限制 500MB，防磁盘耗尽
+- **`file_index/indexer.rs` `scan_directories` 无文件数量上限** → 限制 100,000 个文件，防扫描线程无限阻塞
+- **`chat.rs` `send_chat_file` 文件大小无限制** → 限制 100MB，超大文件引导使用文件共享功能
 
 ---
 

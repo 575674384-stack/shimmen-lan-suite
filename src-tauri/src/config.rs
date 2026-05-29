@@ -82,8 +82,9 @@ pub fn load_config() -> AppConfig {
         cfg.device_id = uuid::Uuid::new_v4().to_string();
     }
 
-    // 只在配置或 device_id 发生变化时才写盘，避免高频 I/O
-    let need_save_config = confy::load::<AppConfig>("shimmen-lan-suite", "config")
+    // 只在配置或 device_id 发生变化时才写盘，避免高频 I/O（重用已读取的 cfg 比较）
+    let saved_opt: Option<AppConfig> = confy::load("shimmen-lan-suite", "config").ok();
+    let need_save_config = saved_opt.as_ref()
         .map(|saved| saved.device_id != cfg.device_id || saved.username != cfg.username)
         .unwrap_or(true);
     if need_save_config {
@@ -108,6 +109,12 @@ pub fn load_config() -> AppConfig {
 
 pub fn save_config(cfg: &AppConfig) -> Result<(), confy::ConfyError> {
     confy::store("shimmen-lan-suite", "config", cfg)
+}
+
+/// 缓存 device_id，避免高频调用 load_config() 反复读盘
+pub fn cached_device_id() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| load_config().device_id)
 }
 
 /// 获取实际使用的下载目录：优先用户配置， fallback 到 app_data_dir/downloads
