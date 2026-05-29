@@ -30,6 +30,45 @@ pub(crate) fn is_path_safe(path: &str) -> bool {
     !path.contains("..") && !std::path::Path::new(path).is_absolute()
 }
 
+/// 检查 JSON 字节流的最大嵌套深度（对象/数组），防止递归炸弹导致栈溢出
+pub(crate) fn check_json_depth(data: &[u8], max_depth: usize) -> bool {
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escape = false;
+    for &b in data {
+        if in_string {
+            if escape {
+                escape = false;
+                continue;
+            }
+            if b == b'\\' {
+                escape = true;
+                continue;
+            }
+            if b == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' | b'[' => {
+                depth += 1;
+                if depth > max_depth {
+                    return false;
+                }
+            }
+            b'}' | b']' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
 pub(crate) fn cleanup_peer_chunks(peer_id: &str) {
     let mut map = chunk_receives().lock().unwrap_or_else(|e| e.into_inner());
     let keys_to_remove: Vec<String> = map.keys()
@@ -127,6 +166,10 @@ fn handle_incoming(stream: TcpStream, pool: ConnectionPool, app_handle: tauri::A
 
     match conn.read_message() {
         Ok(data) => {
+            if !check_json_depth(&data, 50) {
+                eprintln!("[network] handshake JSON nested too deeply from {:?}, dropping", peer_addr);
+                return;
+            }
             if let Ok(msg) = serde_json::from_slice::<serde_json::Value>(&data) {
                 if let Some(peer_id) = msg.get("peer_id").and_then(|v| v.as_str()) {
                     if peer_id.len() > 128 {
@@ -145,7 +188,16 @@ fn handle_incoming(stream: TcpStream, pool: ConnectionPool, app_handle: tauri::A
                     loop {
                         match conn.read_message() {
                             Ok(data) => {
-                                process_message(&peer_id, &data, &app_handle, &pool);
+                                if !check_json_depth(&data, 50) {
+                                    eprintln!("[network] JSON nested too deeply from {}, dropping message", peer_id);
+                                    continue;
+                                }
+                                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    process_message(&peer_id, &data, &app_handle, &pool);
+                                }));
+                                if let Err(e) = result {
+                                    eprintln!("[server] process_message panicked: {:?}", e);
+                                }
                             }
                             Err(e) => {
                                 eprintln!("[network] read error from {}: {}", peer_id, e);
@@ -497,6 +549,10 @@ pub(crate) fn process_message(
                 }
             }
             NetworkMessage::ScreenShare { frame_base64 } => {
+                if frame_base64.len() > 2 * 1024 * 1024 {
+                    eprintln!("[server] ScreenShare frame too large ({} bytes) from {}, dropping", frame_base64.len(), peer_id);
+                    return;
+                }
                 let _ = app_handle.emit("screen-share", serde_json::json!({
                     "peer_id": peer_id,
                     "frame": frame_base64,

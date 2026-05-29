@@ -91,8 +91,8 @@ pub fn handle_transfer_request(
         return;
     }
     
-    if file_path.contains("..") {
-        eprintln!("[file_index] rejected path traversal attempt: {}", file_path);
+    if !crate::network::server::is_path_safe(file_path) {
+        eprintln!("[file_index] rejected unsafe path: {}", file_path);
         return;
     }
 

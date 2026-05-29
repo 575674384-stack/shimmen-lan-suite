@@ -91,6 +91,7 @@ pub fn connect_to_peer(
     }
 
     thread::spawn(move || {
+        let peer_id_for_cleanup = peer_id.clone();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let addr = format!("{}:{}", peer_ip, port);
 
@@ -98,7 +99,7 @@ pub fn connect_to_peer(
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("[network] connect_to_peer {} failed: {}", addr, e);
-                    return;
+                    return None;
                 }
             };
 
@@ -108,7 +109,7 @@ pub fn connect_to_peer(
             let handshake = serde_json::json!({"peer_id": my_id});
             if conn.send_message(&handshake).is_err() {
                 eprintln!("[network] handshake to {} failed", peer_id);
-                return;
+                return Some(conn);
             }
 
             {
@@ -121,12 +122,21 @@ pub fn connect_to_peer(
             loop {
                 match conn.read_message() {
                     Ok(data) => {
-                        crate::network::server::process_message(
-                            &peer_id,
-                            &data,
-                            &app_handle,
-                            &pool,
-                        );
+                        if !crate::network::server::check_json_depth(&data, 50) {
+                            eprintln!("[network] JSON nested too deeply from {}, dropping message", peer_id);
+                            continue;
+                        }
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            crate::network::server::process_message(
+                                &peer_id,
+                                &data,
+                                &app_handle,
+                                &pool,
+                            );
+                        }));
+                        if let Err(e) = result {
+                            eprintln!("[server] process_message panicked: {:?}", e);
+                        }
                     }
                     Err(e) => {
                         eprintln!("[network] outbound read error from {}: {}", peer_id, e);
@@ -139,15 +149,16 @@ pub fn connect_to_peer(
                 }
             }
 
-            let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(c) = p.get(&peer_id) {
-                if c.id == conn.id {
-                    p.remove(&peer_id);
-                }
-            }
-            // 清理该 peer 未完成的文件分块接收，避免句柄泄漏
-            crate::network::server::cleanup_peer_chunks(&peer_id);
+            Some(conn)
         }));
+        // 无论是否 panic，都执行 cleanup
+        let mut p = pool.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(c) = p.get(&peer_id_for_cleanup) {
+            if result.as_ref().map_or(true, |opt_conn| opt_conn.as_ref().map_or(true, |conn| conn.id == c.id)) {
+                p.remove(&peer_id_for_cleanup);
+            }
+        }
+        crate::network::server::cleanup_peer_chunks(&peer_id_for_cleanup);
         if let Err(e) = result {
             eprintln!("[network] outbound connection thread panicked: {:?}", e);
         }

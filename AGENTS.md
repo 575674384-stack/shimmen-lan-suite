@@ -8,7 +8,7 @@
 
 - **名称**：水门内网协同 (shimmen-lan-suite)
 - **类型**：Tauri v2 桌面应用（Windows）
-- **当前版本**：v0.1.14
+- **当前版本**：v0.1.15
 - **核心特性**：星型拓扑内网协同，自动 Leader 选举，零服务器，内网自发现
 - **GitHub**：`575674384-stack/shimmen-lan-suite`
 
@@ -332,6 +332,14 @@ npx tauri build
 - **`tools.rs` `install_software` 无下载大小上限** → 限制 500MB，防磁盘耗尽
 - **`file_index/indexer.rs` `scan_directories` 无文件数量上限** → 限制 100,000 个文件，防扫描线程无限阻塞
 - **`chat.rs` `send_chat_file` 文件大小无限制** → 限制 100MB，超大文件引导使用文件共享功能
+
+### Round 10 — 递归炸弹防护 + 连接泄漏修复 + 数据完整性（v0.1.15）
+- **`serde_json::from_slice` 无递归深度保护** → `check_json_depth()` 手写 JSON 扫描器（不反序列化即检查嵌套深度 ≤50），防 `[[[...]]]` 递归炸弹导致栈溢出
+- **`process_message` panic → 连接永久泄漏** → `handle_incoming` / `connect_to_peer` read loop 内层 `catch_unwind` 包裹 `process_message`，panic 不再跳过后续 cleanup（pool 移除 + chunk 清理）
+- **`connect_to_peer` cleanup 被外层 `catch_unwind` 跳过** → cleanup 代码移到 `catch_unwind` 闭包外部，无论是否 panic 都执行
+- **`send_message` 部分写入失败后数据交错** → `Connection` 新增 `is_broken: AtomicBool`，任意 write/flush 失败后原子标记，后续所有发送线程快速失败，避免向半开连接写数据
+- **`ScreenShare` 接收方无帧大小限制** → 限制 base64 ≤ 2MB，防恶意 peer 伪造超大帧阻塞前端 IPC
+- **`handle_transfer_request` 路径检查不完整** → 使用 `is_path_safe()`（同时检查 `..` 和绝对路径）
 
 ---
 

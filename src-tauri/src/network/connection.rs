@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
@@ -8,6 +9,8 @@ pub struct Connection {
     pub peer_id: String,
     pub stream: Arc<Mutex<TcpStream>>,
     pub id: String,
+    /// 连接是否已标记为损坏（send/write 失败后设置，避免后续线程继续向半开连接写数据）
+    pub is_broken: AtomicBool,
 }
 
 impl Clone for Connection {
@@ -16,26 +19,50 @@ impl Clone for Connection {
             peer_id: self.peer_id.clone(),
             stream: self.stream.clone(),
             id: self.id.clone(),
+            is_broken: AtomicBool::new(self.is_broken.load(Ordering::Relaxed)),
         }
     }
 }
 
 impl Connection {
     pub fn new(peer_id: String, stream: TcpStream) -> Self {
-        Self { peer_id, stream: Arc::new(Mutex::new(stream)), id: uuid::Uuid::new_v4().to_string() }
+        Self {
+            peer_id,
+            stream: Arc::new(Mutex::new(stream)),
+            id: uuid::Uuid::new_v4().to_string(),
+            is_broken: AtomicBool::new(false),
+        }
     }
 
     /// 发送 JSON 消息：先写 4 字节长度前缀（大端），再写 JSON 内容
     /// 使用 Mutex 保护写操作，避免多线程并发写入导致数据交错
     pub fn send_message<T: Serialize>(&self, msg: &T) -> std::io::Result<()> {
+        if self.is_broken.load(Ordering::Relaxed) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "connection marked as broken",
+            ));
+        }
         let json = serde_json::to_vec(msg)?;
         let len = json.len() as u32;
         let mut stream = self.stream.lock().unwrap_or_else(|e| e.into_inner());
         // 设置写超时，防止半开连接导致无限阻塞
-        stream.set_write_timeout(Some(std::time::Duration::from_secs(8)))?;
-        stream.write_all(&len.to_be_bytes())?;
-        stream.write_all(&json)?;
-        stream.flush()?;
+        if let Err(e) = stream.set_write_timeout(Some(std::time::Duration::from_secs(8))) {
+            self.is_broken.store(true, Ordering::Relaxed);
+            return Err(e);
+        }
+        if let Err(e) = stream.write_all(&len.to_be_bytes()) {
+            self.is_broken.store(true, Ordering::Relaxed);
+            return Err(e);
+        }
+        if let Err(e) = stream.write_all(&json) {
+            self.is_broken.store(true, Ordering::Relaxed);
+            return Err(e);
+        }
+        if let Err(e) = stream.flush() {
+            self.is_broken.store(true, Ordering::Relaxed);
+            return Err(e);
+        }
         Ok(())
     }
 
